@@ -14,6 +14,7 @@ namespace ys {
 namespace {
 constexpr int kSchemaRole = Qt::UserRole + 1;
 constexpr int kPathRole = Qt::UserRole + 2;
+constexpr int kNodeRole = Qt::UserRole + 3;
 constexpr int kAutoExpandDepth = 3;
 constexpr int kMaxRows = 200000;
 
@@ -96,6 +97,7 @@ void DataTreeWidget::addNodes(QTreeWidgetItem *parent, const lyd_node *first, in
             it->setToolTip(0, tr("This element is not described by the loaded YANG modules."));
         }
         it->setData(0, kPathRole, DataTree::path(n));
+        it->setData(0, kNodeRole, QVariant::fromValue(static_cast<const void *>(n)));
         if (const lyd_node *c = DataTree::firstChild(n)) {
             addNodes(it, c, depth + 1);
             if (depth < kAutoExpandDepth)
@@ -116,6 +118,19 @@ void DataTreeWidget::showContextMenu(const QPoint &pos)
         ->setEnabled(!value.isEmpty());
     menu.addAction(tr("Copy Instance Path"), this, [this, path] { emit copyRequested(path, tr("instance path")); })
         ->setEnabled(!path.isEmpty());
+    auto *node = static_cast<const lyd_node *>(it->data(0, kNodeRole).value<const void *>());
+    const lysc_node *sch = node ? DataTree::schema(node) : nullptr;
+    if (sch) {
+        menu.addSeparator();
+        auto act = [&](const QString &text, EntryAction a, bool enabled) {
+            menu.addAction(text, this, [this, node, a] { emit entryAction(node, a); })->setEnabled(enabled);
+        };
+        const bool config = !(sch->flags & LYS_CONFIG_R);
+        act(tr("Filter on This Entry"), EntryAction::FilterSubtree, true);
+        act(tr("Filter on This Entry (XPath)"), EntryAction::FilterXPath, true);
+        act(tr("Edit This Entry..."), EntryAction::Edit, config);
+        act(tr("Delete This Entry..."), EntryAction::Delete, config && !(sch->flags & LYS_KEY));
+    }
     menu.addSeparator();
     menu.addAction(tr("Expand All"), this, &QTreeWidget::expandAll);
     menu.addAction(tr("Collapse All"), this, &QTreeWidget::collapseAll);

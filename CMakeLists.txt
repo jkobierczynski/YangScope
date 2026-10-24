@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
 
 project(YangScope
-    VERSION 0.2.0
+    VERSION 0.3.0
     DESCRIPTION "Native YANG / NETCONF / gNMI explorer"
     LANGUAGES CXX)
 
@@ -84,6 +84,8 @@ add_library(yangscope_core STATIC
     src/core/NodeInfo.cpp
     src/core/NodeInfo.h
     src/core/LyCompat.h
+    src/core/EditConfig.cpp
+    src/core/EditConfig.h
     src/core/DataTree.cpp
     src/core/DataTree.h
     src/core/NetconfFraming.cpp
@@ -107,8 +109,7 @@ target_compile_definitions(yangscope_core PUBLIC
     YANGSCOPE_VERSION="${PROJECT_VERSION}")
 
 # --- GUI application --------------------------------------------------------
-qt_add_executable(yangscope
-    src/main.cpp
+add_library(yangscope_gui STATIC
     src/gui/MainWindow.cpp
     src/gui/MainWindow.h
     src/gui/SchemaModel.cpp
@@ -128,7 +129,12 @@ qt_add_executable(yangscope
     src/gui/XmlHighlighter.cpp
     src/gui/XmlHighlighter.h
 )
-target_link_libraries(yangscope PRIVATE yangscope_core Qt6::Widgets)
+target_link_libraries(yangscope_gui PUBLIC yangscope_core Qt6::Widgets)
+
+qt_add_executable(yangscope
+    src/main.cpp
+)
+target_link_libraries(yangscope PRIVATE yangscope_gui)
 qt_add_resources(yangscope "icons"
     PREFIX "/"
     BASE packaging
@@ -166,6 +172,13 @@ if(YANGSCOPE_BUILD_TESTS)
         YANGSCOPE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
     add_test(NAME core COMMAND test_core)
 
+    add_executable(test_edit tests/test_edit.cpp)
+    target_link_libraries(test_edit PRIVATE yangscope_core)
+    target_compile_definitions(test_edit PRIVATE
+        YANGSCOPE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
+        YANGSCOPE_TEST_NETCONF="${CMAKE_CURRENT_SOURCE_DIR}/tests/netconf")
+    add_test(NAME edit COMMAND test_edit)
+
     # NETCONF: framing/XML unit tests always run; the session tests need
     # Python 3 with paramiko for the bundled test server and are skipped
     # (exit code 77) otherwise.
@@ -178,4 +191,15 @@ if(YANGSCOPE_BUILD_TESTS)
         YANGSCOPE_PYTHON="${Python3_EXECUTABLE}")
     add_test(NAME netconf COMMAND test_netconf)
     set_tests_properties(netconf PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
+
+    # End-to-end GUI test against the test server (offscreen platform).
+    add_executable(test_gui tests/test_gui.cpp)
+    target_link_libraries(test_gui PRIVATE yangscope_gui)
+    target_compile_definitions(test_gui PRIVATE
+        YANGSCOPE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
+        YANGSCOPE_TEST_NETCONF="${CMAKE_CURRENT_SOURCE_DIR}/tests/netconf"
+        YANGSCOPE_PYTHON="${Python3_EXECUTABLE}")
+    add_test(NAME gui COMMAND test_gui)
+    set_tests_properties(gui PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 180
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()

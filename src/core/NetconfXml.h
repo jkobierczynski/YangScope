@@ -73,6 +73,25 @@ QByteArray getConfigOp(const QString &datastore, const QByteArray &filter = {});
 QByteArray getSchemaOp(const QString &identifier, const QString &version,
                        const QString &format = QStringLiteral("yang"));
 QByteArray closeSessionOp();
+
+enum class TestOption { Default, TestThenSet, Set, TestOnly };
+enum class ErrorOption { Default, StopOnError, ContinueOnError, RollbackOnError };
+/// <edit-config>; @p configContent are the children of <config>, which may
+/// use the "nc" prefix for nc:operation (it is declared on <config>).
+/// @p defaultOperation: empty, "merge", "replace" or "none".
+QByteArray editConfigOp(const QString &target, const QByteArray &configContent,
+                        const QString &defaultOperation = {},
+                        TestOption test = TestOption::Default,
+                        ErrorOption error = ErrorOption::Default);
+QByteArray lockOp(const QString &datastore);
+QByteArray unlockOp(const QString &datastore);
+QByteArray validateOp(const QString &source);
+QByteArray discardChangesOp();
+/// <commit>; with @p confirmTimeoutSec > 0 a confirmed commit (RFC 6241
+/// 8.4) that the device rolls back unless confirmed in time. @p persist is
+/// the optional persist-id (base:1.1) so another session can confirm it.
+QByteArray commitOp(int confirmTimeoutSec = 0, const QString &persist = {});
+QByteArray cancelCommitOp(const QString &persistId = {});
 QByteArray monitoringSchemasFilter();
 /// <filter type="xpath" select="..."> with namespace declarations for the
 /// given prefix -> namespace pairs.

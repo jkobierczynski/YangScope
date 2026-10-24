@@ -1,5 +1,70 @@
 # Development notes
 
+## 2026-10-24 – v0.3.0, changing configuration
+
+### Local edit-config validation (`core/EditConfig`)
+1. The editor content (children of `<config>`) is read into a small DOM, so
+   each element keeps its `nc:operation`. Elements are matched to schema nodes
+   (through choice/case, across augments); unknown elements, state data, bad
+   operation values and list entries without keys are reported with line
+   numbers.
+2. A copy without operations and without deleted subtrees is parsed by libyang
+   with `PARSE_ONLY | STRICT | NO_STATE`: types, ranges, patterns, identities.
+3. With the device's current config (fetched with get-config of the target),
+   the edit is applied to a copy: `create`/`delete` preconditions are checked
+   against the original, `delete`/`remove`/`replace` drop the existing node,
+   and the outermost merge/replace/create subtrees are merged (minus nested
+   deletes). default-operation `replace` starts from an empty datastore,
+   `none` applies only explicit operations.
+4. `lyd_validate_all(NO_STATE | PRESENT)` on the result catches mandatory,
+   must/when, leafref, unique and min/max-elements problems.
+5. `lyd_diff_siblings` between before and after gives the preview; the
+   `yang:operation` / `yang:orig-value` metadata become "+ path = value",
+   "- path" and "~ path: old -> new" lines.
+The same diff compares running and candidate for the commit preview.
+
+### Candidate workflow
+Lock / unlock / validate / discard / commit / confirmed commit / cancel-commit
+are plain RPCs; the panel tracks lock ownership, uncommitted changes and the
+confirmed-commit deadline (countdown, warning when it passes). A plain commit
+while a confirmed commit is pending confirms it.
+
+### Data entries
+`entryEditXml` duplicates a data node, drops state descendants, prints it with
+libyang (so identityref prefixes are declared) and wraps it in its ancestors
+with their keys. `entrySubtreeFilter` builds content-match filters from the
+keys along the path; `entryXPath` uses `lyd_path`.
+
+### Bugs found by the new GUI test
+- A reply without data (lock, commit) cleared the Data tab; the view now keeps
+  the last reply that had data.
+- Shutdown order: child widgets are destroyed after MainWindow's members, so a
+  reply tree was freed after its libyang context. Harmless with libyang 2.1,
+  a double free with 6.4. MainWindow's destructor now releases data first.
+- A broken string literal in `editConfigOp` produced invalid XML; the live
+  test caught it on the first run.
+
+### Tests
+- `test_edit` (49 checks, no device): types, unknown elements, state data,
+  mandatory, create/delete preconditions, replace, leafref (including
+  deleting the target), default-operation none, round trips of the XML built
+  from data entries.
+- `test_netconf` (234 checks): adds lock/lock-denied/in-use, edit candidate,
+  validate, commit, discard, confirmed commit that times out and rolls back,
+  cancel-commit, identityref under a client-chosen prefix, locks released
+  with their session.
+- `test_gui` (24 checks, offscreen): connect, load device schemas, filter on a
+  list entry, lock, edit the entry, validate, catch an invalid value, send
+  through the confirmation dialog, commit through the preview, verify running
+  from a second session, unlock.
+All pass on libyang 2.1.30 and 6.4.13.
+
+### Test server
+Now keeps running and candidate datastores in memory with locks per session,
+edit-config operations, commit, confirmed commit with a real rollback timer,
+cancel-commit and discard-changes. `--writable-running` allows edits to
+running.
+
 ## 2026-10-24 – v0.2.0, phase 2 (NETCONF client)
 
 ### Design

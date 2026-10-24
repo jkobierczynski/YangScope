@@ -13,6 +13,36 @@ at its real configuration and state. gNMI is next.
 
 ## Status
 
+**Changing configuration (v0.3)**
+
+![Editing a list entry with local validation](docs/edit.png)
+
+- **edit-config, validated locally before anything is sent.** The edit is
+  checked with libyang against the loaded schemas (unknown elements, wrong
+  types, ranges, patterns, state data). When connected, YangScope also fetches
+  the target datastore, applies the edit to a copy following the `nc:operation`
+  semantics (merge, replace, create, delete, remove, and default-operation
+  merge/replace/none) and validates the result: mandatory nodes, `must`/`when`,
+  leafref targets, `unique`, min/max-elements, `create` on existing data and
+  `delete` on missing data.
+- **A change preview before sending:** every leaf that would be added, removed
+  or changed, with old and new values. Nothing goes to the device until you
+  confirm; an invalid edit needs an explicit "Send Anyway".
+- **Candidate datastore workflow:** Lock / Unlock, device-side Validate,
+  Discard Changes, Commit with a preview of what changes between running and
+  candidate, Confirmed Commit with a rollback timer and a live countdown, and
+  Cancel Commit. Shown when the device advertises `:candidate`; edits to
+  running are offered only with `:writable-running`.
+- **Work from the data:** right-click an entry in the reply's Data tab to
+  *Filter on This Entry* (subtree or XPath, keys filled in), *Edit This
+  Entry* (its configuration with ancestors and keys, state data left out) or
+  *Delete This Entry*. From the schema tree, *NETCONF Edit-Config* gives a
+  skeleton with the keys to fill in.
+- test-option and error-option are offered as advertised (`:validate`,
+  `:rollback-on-error`).
+
+![Commit preview](docs/commit-preview.png)
+
 **Phase 2 – NETCONF client (v0.2)**
 
 ![YangScope connected to a NETCONF device](docs/netconf.png)
@@ -63,9 +93,9 @@ at its real configuration and state. gNMI is next.
   (`neighbor/state/session-state`) or in descriptions, with regex support.
 - Loads the complete OpenConfig model set (177 modules) in a few seconds.
 
-**Planned** – see [TODO.md](TODO.md): edit-config validated by libyang before
-sending, NMDA `get-data`, notifications, gNMI Capabilities/Get/Subscribe with
-live values and graphs, datastore diffs.
+**Planned** – see [TODO.md](TODO.md): editing values directly in the data tree,
+NMDA `get-data`, notifications, gNMI Capabilities/Get/Subscribe with live values
+and graphs.
 
 ## Usage
 
@@ -121,7 +151,7 @@ ctest --test-dir build
 
 Fedora/RHEL: `dnf install cmake gcc-c++ qt6-qtbase-devel libyang-devel libssh-devel`.
 
-The NETCONF tests start a small Python test server
+The NETCONF and GUI tests start a small Python test server
 (`tests/netconf/test_server.py`, needs `paramiko`); without it they are
 reported as skipped. The same server is handy for trying the GUI:
 
@@ -130,6 +160,9 @@ python3 tests/netconf/test_server.py --schemas tests/data --schemas tests/netcon
   --data tests/netconf/data.xml --config tests/netconf/config.xml \
   --feature ietf-interfaces=if-mib --port 8830      # user admin, password admin
 ```
+
+It keeps running and candidate datastores in memory, so edits, locks and
+(confirmed) commits behave like on a device until it is restarted.
 
 ### macOS
 

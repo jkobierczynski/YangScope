@@ -17,9 +17,13 @@
 - [x] get / get-config with a subtree or XPath filter built from the selected node
 - [x] Data tree view of replies, typed through libyang; XML and JSON views
 - [ ] Store passwords in the OS keyring (opt-in)
-- [ ] Key values in filters: pick a list entry from the data tree to filter on
-- [ ] edit-config: edit values in the tree, validate locally, show the RPC, then send
-- [ ] lock/unlock, commit/discard-changes, validate for candidate
+- [x] Key values in filters: pick a list entry from the data tree to filter on
+- [x] edit-config with local validation (schemas + current config) and a change preview
+- [x] lock/unlock, validate, commit (with preview), confirmed commit, cancel-commit, discard-changes
+- [ ] Edit values directly in the data tree (inline editors per type)
+- [ ] Lock running as well (some devices want both locked for a commit)
+- [ ] persist / persist-id for confirmed commits across sessions
+- [ ] copy-config / delete-config, startup datastore
 - [ ] NMDA get-data (RFC 8526) for operational and intended datastores
 - [ ] Notifications (create-subscription) viewer
 - [ ] Several devices at once (one panel per session)

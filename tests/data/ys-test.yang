@@ -42,6 +42,12 @@ module ys-test {
       }
       default standalone;
     }
+    leaf preferred-server {
+      description "Must name one of the configured servers.";
+      type leafref {
+        path "../server/name";
+      }
+    }
     container fancy-settings {
       if-feature fancy;
       presence "Enables fancy behaviour.";

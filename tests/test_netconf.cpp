@@ -14,6 +14,7 @@
 #include <QDir>
 #include <QProcess>
 #include <QTemporaryDir>
+#include <QThread>
 
 #include <cstdio>
 #include <functional>
@@ -194,6 +195,11 @@ struct TestServer {
     }
     ~TestServer()
     {
+        if (qEnvironmentVariableIsSet("YANGSCOPE_TEST_SERVER_LOG"))
+        {
+            proc.waitForReadyRead(500);
+            std::fprintf(stderr, "--- server log ---\n%s\n", proc.readAll().constData());
+        }
         proc.kill();
         proc.waitForFinished(2000);
     }
@@ -214,6 +220,121 @@ static const HostKeyPrompt trustOnce = [](const QString &, const QString &fp, Ho
     *save = false; // never touch the real known_hosts from tests
     return fp.startsWith(QLatin1String("SHA256:"));
 };
+
+static QString hostnameIn(const Reply &r)
+{
+    const qsizetype i = r.data.indexOf("hostname>");
+    if (i < 0)
+        return {};
+    const qsizetype start = i + 9;
+    return QString::fromUtf8(r.data.mid(start, r.data.indexOf('<', start) - start));
+}
+
+static bool rpcOk(Session &s, const QByteArray &op, Reply *rep = nullptr)
+{
+    Reply local;
+    Reply *r = rep ? rep : &local;
+    if (!s.rpc(op, r))
+        return false;
+    if (r->hasErrors())
+        std::fprintf(stderr, "  rpc-error: %s\n", qPrintable(r->errors.first().toString()));
+    return !r->hasErrors();
+}
+
+static const QByteArray kSysFilter = QByteArrayLiteral(
+    "<filter type=\"subtree\"><system xmlns=\"urn:yangscope:test\"/></filter>");
+
+/// Candidate workflow: lock, edit, validate, commit, discard, confirmed
+/// commit with rollback and cancel-commit.
+static void testConfigWorkflow(Session &s, int port, const YangContext &ctx)
+{
+    Reply rep;
+    if (!s.isOpen())
+        std::fprintf(stderr, "  session closed before workflow: %s\n", qPrintable(s.lastError()));
+    // edits to running are refused (no :writable-running)
+    const bool sent = s.rpc(editConfigOp("running", "<system xmlns=\"urn:yangscope:test\"><hostname>x</hostname></system>"), &rep);
+    if (!sent)
+        std::fprintf(stderr, "  edit-config running: %s\n", qPrintable(s.lastError()));
+    CHECK(sent);
+    CHECK(rep.hasErrors() && rep.errors.value(0).tag == QLatin1String("operation-not-supported"));
+
+    CHECK(rpcOk(s, lockOp("candidate")));
+    {   // a second session cannot lock or edit
+        Session other;
+        CHECK(other.open(params(port), trustOnce));
+        CHECK(other.rpc(lockOp("candidate"), &rep) && rep.hasErrors());
+        CHECK(rep.errors.value(0).tag == QLatin1String("lock-denied"));
+        CHECK(other.rpc(editConfigOp("candidate", "<system xmlns=\"urn:yangscope:test\"><mode>standalone</mode></system>"), &rep));
+        CHECK(rep.hasErrors() && rep.errors.value(0).tag == QLatin1String("in-use"));
+        other.close();
+    }
+
+    // edit candidate; running unchanged until commit
+    CHECK(rpcOk(s, editConfigOp("candidate", "<system xmlns=\"urn:yangscope:test\"><hostname>r2</hostname></system>")));
+    CHECK(rpcOk(s, getConfigOp("candidate", kSysFilter), &rep));
+    CHECK(hostnameIn(rep) == QLatin1String("r2"));
+    CHECK(rpcOk(s, getConfigOp("running", kSysFilter), &rep));
+    CHECK(hostnameIn(rep) == QLatin1String("lab-router-1"));
+    CHECK(rpcOk(s, validateOp("candidate")));
+    CHECK(rpcOk(s, commitOp()));
+    CHECK(rpcOk(s, getConfigOp("running", kSysFilter), &rep));
+    CHECK(hostnameIn(rep) == QLatin1String("r2"));
+    // <get> reflects the running config too, plus state
+    CHECK(rpcOk(s, getOp(kSysFilter), &rep));
+    CHECK(hostnameIn(rep) == QLatin1String("r2") && rep.data.contains("uptime"));
+
+    // discard-changes reverts the candidate
+    CHECK(rpcOk(s, editConfigOp("candidate", "<system xmlns=\"urn:yangscope:test\" xmlns:nc=\"urn:ietf:params:xml:ns:netconf:base:1.0\">"
+                                             "<server nc:operation=\"delete\"><name>ntp2</name><port>123</port></server></system>")));
+    CHECK(rpcOk(s, getConfigOp("candidate", kSysFilter), &rep));
+    CHECK(!rep.data.contains("ntp2"));
+    CHECK(rpcOk(s, discardChangesOp()));
+    CHECK(rpcOk(s, getConfigOp("candidate", kSysFilter), &rep));
+    CHECK(rep.data.contains("ntp2"));
+
+    // create with an identityref under a client-chosen prefix, then parse
+    // the stored result against the schemas
+    CHECK(rpcOk(s, editConfigOp("candidate", "<system xmlns=\"urn:yangscope:test\" xmlns:x=\"urn:yangscope:test\">"
+                                             "<server><name>ntp3</name><port>123</port><proto>x:tcp</proto></server></system>")));
+    CHECK(rpcOk(s, getConfigOp("candidate", kSysFilter), &rep));
+    DataTree cand;
+    CHECK(cand.parseXml(ctx.raw(), rep.data));
+    CHECK(cand.toJson().contains("tcp"));
+    CHECK(s.rpc(editConfigOp("candidate", "<system xmlns=\"urn:yangscope:test\" xmlns:nc=\"urn:ietf:params:xml:ns:netconf:base:1.0\">"
+                                          "<server nc:operation=\"create\"><name>ntp3</name><port>123</port></server></system>"), &rep));
+    CHECK(rep.hasErrors() && rep.errors.value(0).tag == QLatin1String("data-exists"));
+    CHECK(rpcOk(s, discardChangesOp()));
+
+    // confirmed commit that is not confirmed rolls back
+    CHECK(rpcOk(s, editConfigOp("candidate", "<system xmlns=\"urn:yangscope:test\"><hostname>r3</hostname></system>")));
+    CHECK(rpcOk(s, commitOp(1)));
+    CHECK(rpcOk(s, getConfigOp("running", kSysFilter), &rep));
+    CHECK(hostnameIn(rep) == QLatin1String("r3"));
+    QThread::msleep(1800);
+    CHECK(rpcOk(s, getConfigOp("running", kSysFilter), &rep));
+    CHECK(hostnameIn(rep) == QLatin1String("r2"));
+
+    // ...and cancel-commit reverts at once
+    CHECK(rpcOk(s, editConfigOp("candidate", "<system xmlns=\"urn:yangscope:test\"><hostname>r4</hostname></system>")));
+    CHECK(rpcOk(s, commitOp(60)));
+    CHECK(rpcOk(s, cancelCommitOp()));
+    CHECK(rpcOk(s, getConfigOp("running", kSysFilter), &rep));
+    CHECK(hostnameIn(rep) == QLatin1String("r2"));
+    CHECK(s.rpc(cancelCommitOp(), &rep) && rep.hasErrors());
+
+    CHECK(rpcOk(s, unlockOp("candidate")));
+    CHECK(s.rpc(unlockOp("candidate"), &rep) && rep.hasErrors());
+
+    // a lock dies with its session
+    {
+        Session a;
+        CHECK(a.open(params(port), trustOnce));
+        CHECK(rpcOk(a, lockOp("candidate")));
+        a.close();
+    }
+    CHECK(rpcOk(s, lockOp("candidate")));
+    CHECK(rpcOk(s, unlockOp("candidate")));
+}
 
 static void testLive(bool chunked)
 {
@@ -272,7 +393,7 @@ static void testLive(bool chunked)
     CHECK(rep.data.contains("uptime"));
 
     // rpc-error is reported, session stays usable
-    CHECK(s.rpc(getConfigOp(QStringLiteral("candidate")), &rep));
+    CHECK(s.rpc(getConfigOp(QStringLiteral("startup")), &rep));
     CHECK(rep.hasErrors());
     CHECK_EQ(rep.errors.value(0).tag, "invalid-value");
     CHECK(s.isOpen());
@@ -322,6 +443,8 @@ static void testLive(bool chunked)
         return c;
     };
     CHECK(opaque(ifs.root()) == 0);
+
+    testConfigWorkflow(s, srv.port, devCtx);
 
     s.close();
     CHECK(!s.isOpen());

@@ -77,7 +77,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     refreshAfterLoad(QString());
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    // Child widgets are destroyed after our members, so release everything
+    // that holds libyang data or schema pointers while the context still exists.
+    if (m_netconf)
+        m_netconf->contextAboutToReset();
+    if (m_model)
+        m_model->clear();
+}
 
 void MainWindow::buildUi()
 {
@@ -707,6 +715,11 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
             m_netconfDock->raise();
             m_netconf->sendFor(n, NetconfPanel::Op::GetConfig);
         })->setEnabled(on && !subtreeFilter(n).isEmpty() && access(n) == Access::ReadWrite);
+        menu.addAction(tr("NETCONF Edit-Config..."), this, [this, n] {
+            m_netconfDock->show();
+            m_netconfDock->raise();
+            m_netconf->prepareFor(n, NetconfPanel::Op::EditConfig);
+        })->setEnabled(access(n) == Access::ReadWrite);
         menu.addSeparator();
     }
     menu.addAction(tr("Expand Subtree"), this, [this, idx] { m_tree->expandRecursively(idx, 8); });

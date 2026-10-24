@@ -307,6 +307,75 @@ QByteArray closeSessionOp()
     return QByteArrayLiteral("<close-session/>");
 }
 
+QByteArray editConfigOp(const QString &target, const QByteArray &configContent,
+                        const QString &defaultOperation, TestOption test, ErrorOption error)
+{
+    QByteArray op = QByteArrayLiteral("<edit-config><target><") + esc(target).toUtf8()
+                    + QByteArrayLiteral("/></target>");
+    if (!defaultOperation.isEmpty())
+        op += QByteArrayLiteral("<default-operation>") + esc(defaultOperation).toUtf8()
+              + QByteArrayLiteral("</default-operation>");
+    switch (test) {
+    case TestOption::TestThenSet: op += "<test-option>test-then-set</test-option>"; break;
+    case TestOption::Set: op += "<test-option>set</test-option>"; break;
+    case TestOption::TestOnly: op += "<test-option>test-only</test-option>"; break;
+    case TestOption::Default: break;
+    }
+    switch (error) {
+    case ErrorOption::StopOnError: op += "<error-option>stop-on-error</error-option>"; break;
+    case ErrorOption::ContinueOnError: op += "<error-option>continue-on-error</error-option>"; break;
+    case ErrorOption::RollbackOnError: op += "<error-option>rollback-on-error</error-option>"; break;
+    case ErrorOption::Default: break;
+    }
+    op += QByteArrayLiteral("<config xmlns:nc=\"") + kBaseNs.toUtf8() + QByteArrayLiteral("\">")
+          + configContent + QByteArrayLiteral("</config></edit-config>");
+    return op;
+}
+
+QByteArray lockOp(const QString &datastore)
+{
+    return QByteArrayLiteral("<lock><target><") + esc(datastore).toUtf8()
+           + QByteArrayLiteral("/></target></lock>");
+}
+
+QByteArray unlockOp(const QString &datastore)
+{
+    return QByteArrayLiteral("<unlock><target><") + esc(datastore).toUtf8()
+           + QByteArrayLiteral("/></target></unlock>");
+}
+
+QByteArray validateOp(const QString &source)
+{
+    return QByteArrayLiteral("<validate><source><") + esc(source).toUtf8()
+           + QByteArrayLiteral("/></source></validate>");
+}
+
+QByteArray discardChangesOp()
+{
+    return QByteArrayLiteral("<discard-changes/>");
+}
+
+QByteArray commitOp(int confirmTimeoutSec, const QString &persist)
+{
+    if (confirmTimeoutSec <= 0 && persist.isEmpty())
+        return QByteArrayLiteral("<commit/>");
+    QByteArray op = QByteArrayLiteral("<commit><confirmed/>");
+    if (confirmTimeoutSec > 0)
+        op += QByteArrayLiteral("<confirm-timeout>") + QByteArray::number(confirmTimeoutSec)
+              + QByteArrayLiteral("</confirm-timeout>");
+    if (!persist.isEmpty())
+        op += QByteArrayLiteral("<persist>") + esc(persist).toUtf8() + QByteArrayLiteral("</persist>");
+    return op + QByteArrayLiteral("</commit>");
+}
+
+QByteArray cancelCommitOp(const QString &persistId)
+{
+    if (persistId.isEmpty())
+        return QByteArrayLiteral("<cancel-commit/>");
+    return QByteArrayLiteral("<cancel-commit><persist-id>") + esc(persistId).toUtf8()
+           + QByteArrayLiteral("</persist-id></cancel-commit>");
+}
+
 QByteArray monitoringSchemasFilter()
 {
     return QByteArrayLiteral("<filter type=\"subtree\"><netconf-state xmlns=\"")
