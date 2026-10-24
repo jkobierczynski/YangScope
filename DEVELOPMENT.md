@@ -1,5 +1,62 @@
 # Development notes
 
+## 2026-10-24 – v0.2.0, phase 2 (NETCONF client)
+
+### Design
+- **Own NETCONF client on libssh instead of libnetconf2.** libnetconf2 is
+  POSIX-only, while YangScope targets Windows and macOS too. The protocol part
+  is small: hello exchange, RFC 6242 framing (end-of-message for 1.0, chunked
+  for 1.1, selected when both sides advertise base:1.1) and message-id
+  matching. libssh is available everywhere (apt, Homebrew, vcpkg).
+- **Layers:** `NetconfFraming` (pure, unit-tested byte-by-byte),
+  `NetconfXml` (QXmlStreamReader/Writer: hello, rpc-reply, rpc-error,
+  capability URIs, operation builders), `NetconfSession` (blocking SSH session,
+  host key check, authentication, timeouts, cancel), `SchemaSync` (module list
+  and schema download), `DataTree` (reply data parsed by libyang).
+- **Threading:** the GUI never touches libssh. `NetconfWorker` lives on its own
+  QThread; the host-key question is asked through a blocking queued call to a
+  GUI-thread object.
+- **Host keys:** known_hosts via libssh; unknown keys need an explicit
+  "Trust once" or "Trust and remember", changed keys are refused outright.
+- **Reply data keeps namespace declarations from rpc-reply/data ancestors**, so
+  identityref values like `ianaift:ethernetCsmacd` still resolve when devices
+  declare prefixes at the top of the reply.
+- **Device schemas:** module list from YANG library 1.1, then 1.0, then hello
+  capabilities. Files are named from device-supplied identifiers, so names are
+  sanitised (`../../etc/passwd` becomes `_.._etc_passwd`). Modules are loaded
+  with exactly the advertised features, which matters: e.g. `if-index` only
+  exists with ietf-interfaces' `if-mib` feature.
+- **Data parsing** uses `LYD_PARSE_ONLY | LYD_PARSE_OPAQ`: nothing is rejected,
+  and elements the schemas don't describe show up flagged instead of vanishing.
+- Anything holding libyang data (the reply tree) is released before the schema
+  context is reset, and re-parsed afterwards.
+
+### libyang differences found this round
+| Area | Old | New | How |
+|---|---|---|---|
+| `lyd_node::parent` | `lyd_node_inner *` | `lyd_node *` | use `lyd_parent()` |
+| `LYD_PRINT_WITHSIBLINGS` | name | renamed `LYD_PRINT_SIBLINGS` | value `0x01` in both |
+| identityref in JSON | always `module:identity` | prefix dropped for the leaf's own module | tests accept both |
+
+### Test server
+`tests/netconf/test_server.py` (paramiko) serves fixed XML documents with
+subtree filtering, `get-schema`, `ietf-netconf-monitoring`, both framings,
+password auth, fixed or throw-away host keys and advertised features. The
+tests start it on a free port; they never write to the real known_hosts.
+
+### Verified
+- `test_netconf`: 134 checks (framing, XML, live sessions over 1.1 and 1.0,
+  rpc-error, schema download and cache, wrong password, refused host key)
+  pass on libyang 2.1.30 and 6.4.13.
+- GUI end to end under Xvfb: connect, load device schemas (6 modules), select
+  `/ietf-interfaces:interfaces/interface`, get with subtree filter, typed data
+  tree with no opaque nodes.
+
+### Not yet verified
+- Real devices (Junos, IOS XR, IOS XE, SR Linux, Netopeer2). Expect quirks in
+  keyboard-interactive prompts and YANG library replies.
+- Windows/macOS builds of the libssh part (CI only).
+
 ## 2026-10-24 – v0.1.0, phase 1 (offline schema browser)
 
 ### Design

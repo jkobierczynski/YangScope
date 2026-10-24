@@ -78,6 +78,21 @@ void installLoggerOnce()
     done = true;
 }
 
+} // namespace
+
+LyLogCapture::LyLogCapture(QStringList *sink) : m_prev(t_sink)
+{
+    installLoggerOnce();
+    t_sink = sink;
+}
+
+LyLogCapture::~LyLogCapture()
+{
+    t_sink = m_prev;
+}
+
+namespace {
+
 bool lessByName(const lys_module *a, const lys_module *b)
 {
     int c = qstrcmp(a->name, b->name);
@@ -269,20 +284,34 @@ LoadResult YangContext::loadFile(const QString &path)
     return r;
 }
 
-LoadResult YangContext::loadModule(const QString &name, const QString &revision)
+LoadResult YangContext::loadModule(const QString &name, const QString &revision,
+                                   const QStringList *features)
 {
     LoadResult r;
     if (!m_ctx)
         return r;
     LogCapture cap(&r.messages);
     const char *allFeatures[] = {"*", nullptr};
+    QList<QByteArray> featBytes;
+    QVector<const char *> featPtrs;
+    const char **feats = m_allFeatures ? allFeatures : nullptr;
+    if (features) {
+        for (const QString &f : *features)
+            featBytes << f.toUtf8();
+        for (const QByteArray &b : std::as_const(featBytes))
+            featPtrs << b.constData();
+        featPtrs << nullptr;
+        feats = featPtrs.data();
+    }
     const QByteArray n = name.toUtf8();
     const QByteArray rev = revision.toUtf8();
     lys_module *mod = ly_ctx_load_module(m_ctx, n.constData(),
-                                         revision.isEmpty() ? nullptr : rev.constData(),
-                                         m_allFeatures ? allFeatures : nullptr);
+                                         revision.isEmpty() ? nullptr : rev.constData(), feats);
     r.module = mod;
     r.ok = mod != nullptr;
+    r.messages.removeDuplicates();
+    if (!r.ok && r.messages.isEmpty())
+        r.messages << QStringLiteral("error: module %1 not found").arg(name);
     return r;
 }
 

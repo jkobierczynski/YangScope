@@ -11,14 +11,20 @@
 - [ ] Optional QtSvg icon instead of the embedded PNG
 
 ## Phase 2 – NETCONF
-- [ ] Device profiles (host, port, user; secrets in the OS keyring)
-- [ ] Connect over SSH with libnetconf2, hello/capabilities view
-- [ ] Download schemas from the device (RFC 6022 get-schema / YANG library)
-- [ ] get / get-config with a subtree or XPath filter built by clicking nodes
-- [ ] Data tree view of replies, validated and typed through libyang
+- [x] Device profiles (host, port, user, auth method; passwords not stored)
+- [x] NETCONF over SSH on libssh (1.0 and 1.1 framing), hello/capabilities view
+- [x] Download schemas from the device (hello, YANG library 1.0/1.1, RFC 6022 get-schema)
+- [x] get / get-config with a subtree or XPath filter built from the selected node
+- [x] Data tree view of replies, typed through libyang; XML and JSON views
+- [ ] Store passwords in the OS keyring (opt-in)
+- [ ] Key values in filters: pick a list entry from the data tree to filter on
 - [ ] edit-config: edit values in the tree, validate locally, show the RPC, then send
+- [ ] lock/unlock, commit/discard-changes, validate for candidate
+- [ ] NMDA get-data (RFC 8526) for operational and intended datastores
 - [ ] Notifications (create-subscription) viewer
+- [ ] Several devices at once (one panel per session)
 - [ ] Call Home listener
+- [ ] Jump host / ProxyJump support
 
 ## Phase 3 – gNMI
 - [ ] gRPC/TLS client (gnmi.proto), certificates and insecure mode for labs

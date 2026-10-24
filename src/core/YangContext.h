@@ -20,6 +20,18 @@ struct LoadResult {
     QStringList messages;
 };
 
+/// Collects libyang errors and warnings emitted on this thread while alive.
+class LyLogCapture {
+public:
+    explicit LyLogCapture(QStringList *sink);
+    ~LyLogCapture();
+    LyLogCapture(const LyLogCapture &) = delete;
+    LyLogCapture &operator=(const LyLogCapture &) = delete;
+
+private:
+    QStringList *m_prev;
+};
+
 /// Owns a libyang context and the set of search directories.
 /// All schema pointers handed out stay valid until reset() or destruction.
 class YangContext {
@@ -41,8 +53,11 @@ public:
 
     /// Parse a .yang file and make the module implemented.
     LoadResult loadFile(const QString &path);
-    /// Load a module by name via the search directories.
-    LoadResult loadModule(const QString &name, const QString &revision = {});
+    /// Load a module by name via the search directories and implement it.
+    /// With @p features, exactly those features are enabled (as advertised
+    /// by a device); otherwise the enable-all-features setting applies.
+    LoadResult loadModule(const QString &name, const QString &revision = {},
+                          const QStringList *features = nullptr);
 
     /// List .yang files in a directory (optionally recursive).
     static QStringList yangFilesIn(const QString &dir, bool recursive);

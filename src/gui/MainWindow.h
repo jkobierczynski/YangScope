@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "core/SchemaSync.h"
 #include "core/YangContext.h"
 
 #include <QMainWindow>
@@ -20,6 +21,7 @@ struct lysc_node;
 
 namespace ys {
 
+class NetconfPanel;
 class SchemaModel;
 class SearchPanel;
 class YangHighlighter;
@@ -36,6 +38,10 @@ public:
     void addSearchDirs(const QStringList &dirs, bool recursive);
     /// Select a node by data path or schema path, e.g. "/ietf-interfaces:interfaces".
     bool selectPath(const QString &path);
+    /// Connect to "[user@]host[:port]"; optionally load the device's schemas,
+    /// then select @p path and send a get for it.
+    void connectFromCommandLine(const QString &target, bool loadSchemas,
+                                const QString &path, bool get);
     /// Show the search panel with @p text searched.
     void find(const QString &text);
 
@@ -46,7 +52,17 @@ protected:
     void changeEvent(QEvent *e) override;
 
 private:
+    struct DeviceSpec {
+        QString label, cacheDir;
+        QVector<netconf::DeviceModule> modules;
+    };
+
     void buildUi();
+    void resetContext();
+    void loadDeviceModules(const netconf::SchemaSyncResult &res, const QString &device);
+    void loadDeviceSpec(const DeviceSpec &spec);
+    void netconfForSelection(bool config);
+    void updateDeviceActions();
     void buildMenus();
     void openFilesDialog();
     void openFolderDialog();
@@ -71,6 +87,7 @@ private:
 
     YangContext m_ctx;
     QStringList m_loadedFiles;           // in load order, for reload
+    DeviceSpec m_device;                 // modules loaded from a device, for reload
     const lys_module *m_shownModule = nullptr;
 
     SchemaModel *m_model = nullptr;
@@ -91,6 +108,13 @@ private:
     QAction *m_allFeaturesAct = nullptr;
     QAction *m_recursiveAct = nullptr;
     QAction *m_internalAct = nullptr;
+    QAction *m_connectAct = nullptr;
+    QAction *m_disconnectAct = nullptr;
+    QAction *m_deviceSchemasAct = nullptr;
+    QAction *m_getAct = nullptr;
+    QAction *m_getConfigAct = nullptr;
+    NetconfPanel *m_netconf = nullptr;
+    QDockWidget *m_netconfDock = nullptr;
 };
 
 } // namespace ys

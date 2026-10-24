@@ -1,0 +1,48 @@
+<config>
+  <system xmlns="urn:yangscope:test">
+    <hostname>lab-router-1</hostname>
+    <mode>cluster</mode>
+    <server>
+      <name>ntp1</name>
+      <port>123</port>
+      <proto xmlns:yst="urn:yangscope:test">yst:udp</proto>
+      <weight>60.00</weight>
+      <v4>192.0.2.10</v4>
+      <comment xmlns="urn:yangscope:test-aug">primary</comment>
+    </server>
+    <server>
+      <name>ntp2</name>
+      <port>123</port>
+      <proto xmlns:yst="urn:yangscope:test">yst:udp</proto>
+      <weight>40.00</weight>
+      <v6>2001:db8::10</v6>
+    </server>
+  </system>
+  <interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"
+              xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">
+    <interface>
+      <name>eth0</name>
+      <description>uplink to core-1</description>
+      <type>ianaift:ethernetCsmacd</type>
+      <enabled>true</enabled>
+      <ipv4 xmlns="urn:ietf:params:xml:ns:yang:ietf-ip">
+        <mtu>1500</mtu>
+        <address>
+          <ip>192.0.2.1</ip>
+          <prefix-length>24</prefix-length>
+        </address>
+      </ipv4>
+    </interface>
+    <interface>
+      <name>eth1</name>
+      <description>OT cell zone 3 conduit</description>
+      <type>ianaift:ethernetCsmacd</type>
+      <enabled>false</enabled>
+    </interface>
+    <interface>
+      <name>lo</name>
+      <type>ianaift:softwareLoopback</type>
+      <enabled>true</enabled>
+    </interface>
+  </interfaces>
+</config>

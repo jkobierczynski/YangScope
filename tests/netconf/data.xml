@@ -1,0 +1,76 @@
+<data>
+  <system xmlns="urn:yangscope:test">
+    <hostname>lab-router-1</hostname>
+    <mode>cluster</mode>
+    <server>
+      <name>ntp1</name>
+      <port>123</port>
+      <proto xmlns:yst="urn:yangscope:test">yst:udp</proto>
+      <weight>60.00</weight>
+      <v4>192.0.2.10</v4>
+      <comment xmlns="urn:yangscope:test-aug">primary</comment>
+    </server>
+    <server>
+      <name>ntp2</name>
+      <port>123</port>
+      <proto xmlns:yst="urn:yangscope:test">yst:udp</proto>
+      <weight>40.00</weight>
+      <v6>2001:db8::10</v6>
+    </server>
+    <status>
+      <uptime>86400</uptime>
+      <alarms>fan-tray-2 degraded</alarms>
+      <alarms>psu-1 redundancy lost</alarms>
+    </status>
+  </system>
+  <interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"
+              xmlns:ianaift="urn:ietf:params:xml:ns:yang:iana-if-type">
+    <interface>
+      <name>eth0</name>
+      <description>uplink to core-1</description>
+      <type>ianaift:ethernetCsmacd</type>
+      <enabled>true</enabled>
+      <oper-status>up</oper-status>
+      <if-index>2</if-index>
+      <phys-address>52:54:00:12:34:56</phys-address>
+      <speed>1000000000</speed>
+      <statistics>
+        <discontinuity-time>2026-10-01T08:00:00+02:00</discontinuity-time>
+        <in-octets>918273645</in-octets>
+        <in-unicast-pkts>812345</in-unicast-pkts>
+        <in-errors>3</in-errors>
+        <out-octets>123456789</out-octets>
+        <out-unicast-pkts>654321</out-unicast-pkts>
+      </statistics>
+      <ipv4 xmlns="urn:ietf:params:xml:ns:yang:ietf-ip">
+        <mtu>1500</mtu>
+        <address>
+          <ip>192.0.2.1</ip>
+          <prefix-length>24</prefix-length>
+          <origin>static</origin>
+        </address>
+      </ipv4>
+    </interface>
+    <interface>
+      <name>eth1</name>
+      <description>OT cell zone 3 conduit</description>
+      <type>ianaift:ethernetCsmacd</type>
+      <enabled>false</enabled>
+      <oper-status>down</oper-status>
+      <if-index>3</if-index>
+      <statistics>
+        <discontinuity-time>2026-10-01T08:00:00+02:00</discontinuity-time>
+      </statistics>
+    </interface>
+    <interface>
+      <name>lo</name>
+      <type>ianaift:softwareLoopback</type>
+      <enabled>true</enabled>
+      <oper-status>up</oper-status>
+      <if-index>1</if-index>
+      <statistics>
+        <discontinuity-time>2026-10-01T08:00:00+02:00</discontinuity-time>
+      </statistics>
+    </interface>
+  </interfaces>
+</data>

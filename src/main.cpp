@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <QIcon>
 #include <QTimer>
 
 int main(int argc, char **argv)
@@ -12,6 +13,8 @@ int main(int argc, char **argv)
     QApplication::setApplicationName(QStringLiteral("YangScope"));
     QApplication::setOrganizationName(QStringLiteral("YangScope"));
     QApplication::setApplicationVersion(QStringLiteral(YANGSCOPE_VERSION));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/yangscope.png")));
+    QApplication::setDesktopFileName(QStringLiteral("yangscope"));
 
     QCommandLineParser parser;
     parser.setApplicationDescription(QStringLiteral("Native YANG schema explorer"));
@@ -30,6 +33,16 @@ int main(int argc, char **argv)
                                QStringLiteral("Search for nodes after loading."),
                                QStringLiteral("text"));
     parser.addOption(findOpt);
+    QCommandLineOption connectOpt({QStringLiteral("c"), QStringLiteral("connect")},
+                                  QStringLiteral("Connect to a NETCONF device: [user@]host[:port]."),
+                                  QStringLiteral("target"));
+    QCommandLineOption deviceSchemas(QStringLiteral("device-schemas"),
+                                     QStringLiteral("After connecting, download and load the device's schemas."));
+    QCommandLineOption getOpt(QStringLiteral("get"),
+                              QStringLiteral("After connecting, send a NETCONF get for the --select node."));
+    parser.addOption(connectOpt);
+    parser.addOption(deviceSchemas);
+    parser.addOption(getOpt);
     parser.addOption(searchDir);
     parser.addOption(recursive);
     parser.addOption(select);
@@ -47,14 +60,21 @@ int main(int argc, char **argv)
     const QStringList paths = parser.positionalArguments();
     const QString selectPath = parser.value(select);
     const QString findText = parser.value(findOpt);
-    if (!paths.isEmpty() || !selectPath.isEmpty() || !findText.isEmpty()) {
-        QTimer::singleShot(0, &w, [&w, paths, rec, selectPath, findText] {
+    const QString target = parser.value(connectOpt);
+    const bool loadDevice = parser.isSet(deviceSchemas);
+    const bool doGet = parser.isSet(getOpt);
+    if (!paths.isEmpty() || !selectPath.isEmpty() || !findText.isEmpty() || !target.isEmpty()) {
+        QTimer::singleShot(0, &w, [&w, paths, rec, selectPath, findText, target, loadDevice, doGet] {
             if (!paths.isEmpty())
                 w.openPaths(paths, rec);
             if (!findText.isEmpty())
                 w.find(findText);
-            if (!selectPath.isEmpty())
+            if (!target.isEmpty()) {
+                // selection happens once the device (and its schemas) are there
+                w.connectFromCommandLine(target, loadDevice, selectPath, doGet);
+            } else if (!selectPath.isEmpty()) {
                 w.selectPath(selectPath);
+            }
         });
     }
     // For documentation and CI smoke tests: save a screenshot and exit.

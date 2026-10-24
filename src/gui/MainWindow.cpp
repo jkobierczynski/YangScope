@@ -2,6 +2,7 @@
 #include "gui/MainWindow.h"
 
 #include "core/NodeInfo.h"
+#include "gui/NetconfPanel.h"
 #include "gui/SchemaModel.h"
 #include "gui/SearchPanel.h"
 #include "gui/YangHighlighter.h"
@@ -20,6 +21,9 @@
 #include <QFileInfo>
 #include <QFontDatabase>
 #include <QHeaderView>
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QTimer>
 #include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
@@ -27,6 +31,7 @@
 #include <QMimeData>
 #include <QPlainTextEdit>
 #include <QProgressDialog>
+#include <QPushButton>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSettings>
@@ -148,7 +153,33 @@ void MainWindow::buildUi()
     m_logDock->setWidget(m_log);
     addDockWidget(Qt::BottomDockWidgetArea, m_logDock);
     tabifyDockWidget(m_searchDock, m_logDock);
+
+    m_netconf = new NetconfPanel(m_ctx, this);
+    m_netconfDock = new QDockWidget(tr("NETCONF"), this);
+    m_netconfDock->setObjectName(QStringLiteral("netconfDock"));
+    m_netconfDock->setWidget(m_netconf);
+    addDockWidget(Qt::BottomDockWidgetArea, m_netconfDock);
+    tabifyDockWidget(m_logDock, m_netconfDock);
     m_searchDock->raise();
+    connect(m_netconf, &NetconfPanel::logLines, this, [this](const QStringList &l) { log(l); });
+    connect(m_netconf, &NetconfPanel::statusMessage, this,
+            [this](const QString &m) { statusBar()->showMessage(m, 6000); });
+    connect(m_netconf, &NetconfPanel::copyRequested, this, &MainWindow::copyToClipboard);
+    connect(m_netconf, &NetconfPanel::schemaNodeActivated, this, [this](const lysc_node *n) {
+        const QModelIndex idx = m_model->indexForNode(n);
+        if (idx.isValid()) {
+            const QSignalBlocker b(m_tree->selectionModel()); // keep the request as it is
+            m_tree->setCurrentIndex(idx);
+            m_tree->scrollTo(idx);
+            showNode(n);
+        }
+    });
+    connect(m_netconf, &NetconfPanel::deviceSchemasReady, this, &MainWindow::loadDeviceModules);
+    connect(m_netconf, &NetconfPanel::connectionChanged, this, [this](bool on) {
+        setWindowTitle(on ? QStringLiteral("YangScope - %1").arg(m_netconf->deviceLabel().section(QLatin1Char(' '), 0, 0))
+                          : QStringLiteral("YangScope"));
+        updateDeviceActions();
+    });
 
     m_statusModules = new QLabel(this);
     statusBar()->addPermanentWidget(m_statusModules);
@@ -187,6 +218,25 @@ void MainWindow::buildMenus()
     view->addAction(m_searchDock->toggleViewAction());
     view->addAction(m_logDock->toggleViewAction());
 
+    view->addAction(m_netconfDock->toggleViewAction());
+
+    QMenu *dev = menuBar()->addMenu(tr("&Device"));
+    m_connectAct = dev->addAction(tr("&Connect..."), this, [this] {
+        m_netconfDock->show();
+        m_netconfDock->raise();
+        m_netconf->connectDialog();
+    });
+    m_connectAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_K));
+    m_disconnectAct = dev->addAction(tr("&Disconnect"), m_netconf, &NetconfPanel::disconnectDevice);
+    dev->addSeparator();
+    m_deviceSchemasAct = dev->addAction(tr("&Load Device Schemas"), m_netconf, &NetconfPanel::loadDeviceSchemas);
+    dev->addSeparator();
+    m_getAct = dev->addAction(tr("&Get Selected Node"), this, [this] { netconfForSelection(false); });
+    m_getAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_G));
+    m_getConfigAct = dev->addAction(tr("Get-&Config Selected Node"), this, [this] { netconfForSelection(true); });
+    m_getConfigAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_G));
+    updateDeviceActions();
+
     QMenu *opts = menuBar()->addMenu(tr("&Options"));
     m_allFeaturesAct = opts->addAction(tr("Enable All &Features"));
     m_allFeaturesAct->setCheckable(true);
@@ -222,6 +272,9 @@ void MainWindow::buildMenus()
     tb->addAction(reload);
     tb->addSeparator();
     tb->addAction(find);
+    tb->addSeparator();
+    tb->addAction(m_connectAct);
+    tb->addAction(m_getAct);
 
     updateRecentMenu();
 }
@@ -348,30 +401,189 @@ void MainWindow::loadFiles(const QStringList &files)
     refreshAfterLoad(summary);
 }
 
+void MainWindow::resetContext()
+{
+    // Everything holding schema pointers must let go first.
+    m_netconf->contextAboutToReset();
+    m_model->clear();
+    m_shownModule = nullptr;
+    m_ctx.reset();
+}
+
 void MainWindow::reloadAll()
 {
     const QStringList files = m_loadedFiles;
+    const DeviceSpec device = m_device;
     m_loadedFiles.clear();
-    m_model->clear();
-    m_ctx.reset();
+    m_device = DeviceSpec();
+    resetContext();
     log(tr("reloading..."));
+    if (!device.modules.isEmpty())
+        loadDeviceSpec(device);
     loadFiles(files);
-    if (files.isEmpty())
+    if (files.isEmpty() && device.modules.isEmpty())
         refreshAfterLoad(QString());
 }
 
 void MainWindow::closeAll()
 {
     m_loadedFiles.clear();
-    m_model->clear();
-    m_ctx.reset();
+    m_device = DeviceSpec();
+    resetContext();
     refreshAfterLoad(tr("All modules closed"));
+}
+
+void MainWindow::loadDeviceModules(const netconf::SchemaSyncResult &res, const QString &device)
+{
+    if (m_model->moduleCount() > 0) {
+        QMessageBox box(this);
+        box.setIcon(QMessageBox::Question);
+        box.setWindowTitle(tr("Load Device Schemas"));
+        box.setText(tr("Replace the loaded modules with the %n module(s) implemented by %1?",
+                       nullptr, int(res.modules.size())).arg(device));
+        box.setInformativeText(tr("Replacing gives exactly the device's view, with its features. "
+                                  "Adding keeps your files, but revisions may clash."));
+        QPushButton *replace = box.addButton(tr("Replace"), QMessageBox::AcceptRole);
+        QPushButton *add = box.addButton(tr("Add"), QMessageBox::ActionRole);
+        box.addButton(QMessageBox::Cancel);
+        box.setDefaultButton(replace);
+        box.exec();
+        if (box.clickedButton() == static_cast<QAbstractButton *>(replace)) {
+            m_loadedFiles.clear();
+            resetContext();
+        } else if (box.clickedButton() != static_cast<QAbstractButton *>(add)) {
+            return;
+        } else {
+            m_netconf->contextAboutToReset();
+            m_model->clear();
+        }
+    } else {
+        m_netconf->contextAboutToReset();
+        m_model->clear();
+    }
+    DeviceSpec spec;
+    spec.label = device;
+    spec.cacheDir = res.cacheDir;
+    for (const netconf::DeviceModule &m : res.modules)
+        if (m.implemented)
+            spec.modules << m;
+    loadDeviceSpec(spec);
+}
+
+void MainWindow::loadDeviceSpec(const DeviceSpec &spec)
+{
+    m_ctx.addSearchDir(spec.cacheDir, false);
+    int ok = 0;
+    QStringList failed;
+    for (const netconf::DeviceModule &m : spec.modules) {
+        const LoadResult r = m_ctx.loadModule(m.name, m.revision, &m.features);
+        if (r.ok) {
+            ++ok;
+        } else {
+            failed << m.name;
+            QStringList msgs;
+            for (const QString &line : r.messages)
+                msgs << QStringLiteral("  ") + line;
+            log(QStringList{tr("failed: %1@%2").arg(m.name, m.revision)} + msgs);
+        }
+    }
+    m_device = spec;
+    QString summary = tr("Loaded %n device module(s) from %1", nullptr, ok).arg(spec.label);
+    if (!failed.isEmpty()) {
+        summary += tr(", %n failed (see Messages)", nullptr, int(failed.size()));
+        m_logDock->show();
+        m_logDock->raise();
+    }
+    log(summary);
+    refreshAfterLoad(summary);
+}
+
+void MainWindow::connectFromCommandLine(const QString &target, bool loadSchemas,
+                                        const QString &path, bool get)
+{
+    // [user@]host[:port], with [v6-address]:port supported
+    static const QRegularExpression re(QStringLiteral("^(?:([^@]+)@)?(\\[[^\\]]+\\]|[^:]+)(?::(\\d+))?$"));
+    const auto m = re.match(target);
+    if (!m.hasMatch()) {
+        log(tr("error: cannot parse --connect target \"%1\" (expected [user@]host[:port])").arg(target));
+        return;
+    }
+    netconf::ConnectParams p;
+    p.user = m.captured(1);
+    p.host = m.captured(2);
+    if (p.host.startsWith(QLatin1Char('[')))
+        p.host = p.host.mid(1, p.host.size() - 2);
+    p.port = m.captured(3).isEmpty() ? 830 : m.captured(3).toInt();
+    // For scripted use only; interactive users get a password prompt.
+    const QByteArray envPw = qgetenv("YANGSCOPE_NETCONF_PASSWORD");
+    if (!envPw.isEmpty()) {
+        p.password = QString::fromUtf8(envPw);
+    } else if (!p.user.isEmpty()) {
+        bool ok = false;
+        p.password = QInputDialog::getText(this, tr("Connect"), tr("Password for %1@%2 (leave empty to use SSH keys):")
+                                                                   .arg(p.user, p.host),
+                                           QLineEdit::Password, QString(), &ok);
+        if (!ok)
+            return;
+    }
+    p.auth = p.password.isEmpty() ? netconf::AuthMethod::Auto : netconf::AuthMethod::Password;
+    p.knownHostsFile = qEnvironmentVariable("YANGSCOPE_KNOWN_HOSTS");
+
+    auto afterSchemas = [this, path, get] {
+        if (!path.isEmpty())
+            selectPath(path);
+        if (get)
+            netconfForSelection(false);
+    };
+    auto *onConnect = new QMetaObject::Connection;
+    *onConnect = connect(m_netconf, &NetconfPanel::connectionChanged, this,
+                         [this, onConnect, loadSchemas, afterSchemas](bool on) {
+        disconnect(*onConnect);
+        delete onConnect;
+        if (!on)
+            return;
+        if (!loadSchemas) {
+            afterSchemas();
+            return;
+        }
+        auto *onSchemas = new QMetaObject::Connection;
+        *onSchemas = connect(m_netconf, &NetconfPanel::deviceSchemasReady, this,
+                             [this, onSchemas, afterSchemas] {
+            disconnect(*onSchemas);
+            delete onSchemas;
+            QTimer::singleShot(0, this, afterSchemas);
+        });
+        m_netconf->loadDeviceSchemas();
+    });
+    m_netconfDock->show();
+    m_netconfDock->raise();
+    m_netconf->connectTo(p, QString());
+}
+
+void MainWindow::netconfForSelection(bool config)
+{
+    const QModelIndex idx = m_tree->currentIndex();
+    m_netconfDock->show();
+    m_netconfDock->raise();
+    m_netconf->sendFor(idx.isValid() ? m_model->nodeAt(idx) : nullptr,
+                       config ? NetconfPanel::Op::GetConfig : NetconfPanel::Op::Get);
+}
+
+void MainWindow::updateDeviceActions()
+{
+    const bool on = m_netconf->isConnected();
+    m_connectAct->setEnabled(!on);
+    m_disconnectAct->setEnabled(on);
+    m_deviceSchemasAct->setEnabled(on);
+    m_getAct->setEnabled(on);
+    m_getConfigAct->setEnabled(on);
 }
 
 void MainWindow::refreshAfterLoad(const QString &summary)
 {
     m_model->rebuild(m_ctx, m_internalAct->isChecked());
     m_search->invalidate();
+    m_netconf->contextChanged();
     m_shownModule = nullptr;
     m_details->setHtml(m_model->moduleCount() == 0
         ? tr("<h2>No modules loaded</h2>"
@@ -396,6 +608,7 @@ void MainWindow::refreshAfterLoad(const QString &summary)
 void MainWindow::onCurrentChanged()
 {
     const QModelIndex idx = m_tree->currentIndex();
+    m_netconf->setSelectedNode(idx.isValid() ? m_model->nodeAt(idx) : nullptr);
     if (!idx.isValid())
         return;
     if (const lysc_node *n = m_model->nodeAt(idx))
@@ -483,6 +696,18 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
             connect(a, &QAction::triggered, this, [this, value, what] { copyToClipboard(value, what); });
         }
         menu.addSeparator();
+        const bool on = m_netconf->isConnected();
+        menu.addAction(tr("NETCONF Get"), this, [this, n] {
+            m_netconfDock->show();
+            m_netconfDock->raise();
+            m_netconf->sendFor(n, NetconfPanel::Op::Get);
+        })->setEnabled(on && !subtreeFilter(n).isEmpty());
+        menu.addAction(tr("NETCONF Get-Config"), this, [this, n] {
+            m_netconfDock->show();
+            m_netconfDock->raise();
+            m_netconf->sendFor(n, NetconfPanel::Op::GetConfig);
+        })->setEnabled(on && !subtreeFilter(n).isEmpty() && access(n) == Access::ReadWrite);
+        menu.addSeparator();
     }
     menu.addAction(tr("Expand Subtree"), this, [this, idx] { m_tree->expandRecursively(idx, 8); });
     menu.addAction(tr("Collapse Subtree"), this, [this, idx] {
@@ -568,6 +793,8 @@ void MainWindow::applyThemeColors()
     const bool dark = isDarkPalette();
     m_sourceHl->updateColors(dark);
     m_treeHl->updateColors(dark);
+    if (m_netconf)
+        m_netconf->applyThemeColors(dark);
 }
 
 void MainWindow::changeEvent(QEvent *e)
@@ -601,6 +828,7 @@ void MainWindow::closeEvent(QCloseEvent *e)
     s.setValue(QStringLiteral("window/geometry"), saveGeometry());
     s.setValue(QStringLiteral("window/state"), saveState());
     s.setValue(QStringLiteral("window/splitter"), m_splitter->saveState());
+    m_netconf->disconnectDevice();
     QMainWindow::closeEvent(e);
 }
 
@@ -608,7 +836,7 @@ void MainWindow::about()
 {
     QMessageBox::about(this, tr("About YangScope"),
         tr("<h3>YangScope %1</h3>"
-           "<p>A native YANG schema explorer, with NETCONF and gNMI support planned.</p>"
+           "<p>A native YANG schema explorer and NETCONF client; gNMI support is planned.</p>"
            "<p>Built with Qt %2 and libyang %3 (CESNET).</p>"
            "<p>Licensed under the GNU GPL v3 or later.</p>")
             .arg(QStringLiteral(YANGSCOPE_VERSION), QString::fromLatin1(qVersion()),

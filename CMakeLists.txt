@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.19)
 
 project(YangScope
-    VERSION 0.1.0
+    VERSION 0.2.0
     DESCRIPTION "Native YANG / NETCONF / gNMI explorer"
     LANGUAGES CXX)
 
@@ -16,6 +16,24 @@ endif()
 option(YANGSCOPE_BUILD_TESTS "Build the test suite" ON)
 
 find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets)
+
+# --- libssh (NETCONF over SSH) ----------------------------------------------
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(LIBSSH IMPORTED_TARGET libssh>=0.9)
+endif()
+add_library(yangscope_libssh INTERFACE)
+if(LIBSSH_FOUND)
+    target_link_libraries(yangscope_libssh INTERFACE PkgConfig::LIBSSH)
+else()
+    # vcpkg and some distributions ship a CMake package instead
+    find_package(libssh CONFIG REQUIRED)
+    if(TARGET ssh::ssh)
+        target_link_libraries(yangscope_libssh INTERFACE ssh::ssh)
+    else()
+        target_link_libraries(yangscope_libssh INTERFACE ssh)
+    endif()
+endif()
 
 # --- libyang (CESNET) -------------------------------------------------------
 # Supported: libyang 2.1 and newer (tested with 2.1.30 and 6.4.x).
@@ -66,9 +84,19 @@ add_library(yangscope_core STATIC
     src/core/NodeInfo.cpp
     src/core/NodeInfo.h
     src/core/LyCompat.h
+    src/core/DataTree.cpp
+    src/core/DataTree.h
+    src/core/NetconfFraming.cpp
+    src/core/NetconfFraming.h
+    src/core/NetconfXml.cpp
+    src/core/NetconfXml.h
+    src/core/NetconfSession.cpp
+    src/core/NetconfSession.h
+    src/core/SchemaSync.cpp
+    src/core/SchemaSync.h
 )
 target_include_directories(yangscope_core PUBLIC src)
-target_link_libraries(yangscope_core PUBLIC Qt6::Core yangscope_libyang)
+target_link_libraries(yangscope_core PUBLIC Qt6::Core yangscope_libyang yangscope_libssh)
 if(YANGSCOPE_LY_LOG_CLB_V3)
     target_compile_definitions(yangscope_core PRIVATE YANGSCOPE_LY_LOG_CLB_V3=1)
 endif()
@@ -89,8 +117,22 @@ qt_add_executable(yangscope
     src/gui/YangHighlighter.h
     src/gui/SearchPanel.cpp
     src/gui/SearchPanel.h
+    src/gui/NetconfWorker.cpp
+    src/gui/NetconfWorker.h
+    src/gui/ConnectDialog.cpp
+    src/gui/ConnectDialog.h
+    src/gui/NetconfPanel.cpp
+    src/gui/NetconfPanel.h
+    src/gui/DataTreeWidget.cpp
+    src/gui/DataTreeWidget.h
+    src/gui/XmlHighlighter.cpp
+    src/gui/XmlHighlighter.h
 )
 target_link_libraries(yangscope PRIVATE yangscope_core Qt6::Widgets)
+qt_add_resources(yangscope "icons"
+    PREFIX "/"
+    BASE packaging
+    FILES packaging/yangscope.png)
 set_target_properties(yangscope PROPERTIES
     WIN32_EXECUTABLE ON
     MACOSX_BUNDLE ON
@@ -123,4 +165,17 @@ if(YANGSCOPE_BUILD_TESTS)
     target_compile_definitions(test_core PRIVATE
         YANGSCOPE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
     add_test(NAME core COMMAND test_core)
+
+    # NETCONF: framing/XML unit tests always run; the session tests need
+    # Python 3 with paramiko for the bundled test server and are skipped
+    # (exit code 77) otherwise.
+    find_package(Python3 COMPONENTS Interpreter)
+    add_executable(test_netconf tests/test_netconf.cpp)
+    target_link_libraries(test_netconf PRIVATE yangscope_core)
+    target_compile_definitions(test_netconf PRIVATE
+        YANGSCOPE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/data"
+        YANGSCOPE_TEST_NETCONF="${CMAKE_CURRENT_SOURCE_DIR}/tests/netconf"
+        YANGSCOPE_PYTHON="${Python3_EXECUTABLE}")
+    add_test(NAME netconf COMMAND test_netconf)
+    set_tests_properties(netconf PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 120)
 endif()

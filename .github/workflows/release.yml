@@ -25,7 +25,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build g++ pkg-config libpcre2-dev libgl-dev libfuse2 \
+            cmake ninja-build g++ pkg-config libpcre2-dev libgl-dev libfuse2 libssh-dev python3-paramiko \
             libxkbcommon-x11-0 libxcb-cursor0
       - name: Build libyang
         run: |
@@ -79,7 +79,7 @@ jobs:
       - name: Install libyang (vcpkg)
         shell: pwsh
         run: |
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libyang:x64-windows
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libyang:x64-windows libssh:x64-windows
       - name: Build
         shell: pwsh
         run: |
@@ -116,7 +116,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: brew install qt libyang pkg-config ninja
+        run: brew install qt libyang libssh pkg-config ninja
       - name: Build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \

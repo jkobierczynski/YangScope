@@ -15,7 +15,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build g++ pkg-config qt6-base-dev libgl-dev libyang2-dev
+            cmake ninja-build g++ pkg-config qt6-base-dev libgl-dev libyang2-dev libssh-dev python3-paramiko
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Build
@@ -32,7 +32,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build g++ pkg-config qt6-base-dev libgl-dev libpcre2-dev
+            cmake ninja-build g++ pkg-config qt6-base-dev libgl-dev libpcre2-dev libssh-dev python3-paramiko
       - name: Build libyang (latest release tag)
         run: |
           TAG=$(git ls-remote --tags --refs https://github.com/CESNET/libyang \
