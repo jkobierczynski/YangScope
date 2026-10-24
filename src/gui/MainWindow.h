@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "core/GnmiTypes.h"
 #include "core/SchemaSync.h"
 #include "core/YangContext.h"
 
@@ -21,6 +22,7 @@ struct lysc_node;
 
 namespace ys {
 
+class GnmiPanel;
 class NetconfPanel;
 class SchemaModel;
 class SearchPanel;
@@ -42,6 +44,11 @@ public:
     /// then select @p path and send a get for it.
     void connectFromCommandLine(const QString &target, bool loadSchemas,
                                 const QString &path, bool get);
+    /// gNMI equivalent: connect, optionally load the listed models from the
+    /// search directories, select @p path, then Get or Subscribe.
+    void gnmiFromCommandLine(const QString &target, bool insecure, const QString &caFile,
+                             const QString &serverName, bool loadModels, const QString &path,
+                             bool get, bool subscribe);
     /// Show the search panel with @p text searched.
     void find(const QString &text);
 
@@ -58,7 +65,10 @@ private:
     };
 
     void buildUi();
+    void releaseSchemaUsers();
     void resetContext();
+    void loadGnmiModels(const QVector<gnmi::ModelData> &models, const QString &target);
+    void gnmiForSelection(int op);
     void loadDeviceModules(const netconf::SchemaSyncResult &res, const QString &device);
     void loadDeviceSpec(const DeviceSpec &spec);
     void netconfForSelection(bool config);
@@ -115,6 +125,12 @@ private:
     QAction *m_getConfigAct = nullptr;
     NetconfPanel *m_netconf = nullptr;
     QDockWidget *m_netconfDock = nullptr;
+    GnmiPanel *m_gnmi = nullptr;
+    QDockWidget *m_gnmiDock = nullptr;
+    QAction *m_gnmiConnectAct = nullptr;
+    QAction *m_gnmiDisconnectAct = nullptr;
+    QAction *m_gnmiGetAct = nullptr;
+    QAction *m_gnmiSubAct = nullptr;
 };
 
 } // namespace ys

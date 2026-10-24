@@ -22,6 +22,9 @@ public:
     void showTree(const DataTree &tree);
     void clearTree();
     int nodeCount() const { return m_count; }
+    /// Label the entry actions for gNMI: FilterSubtree = "Get", FilterXPath =
+    /// "Subscribe", Edit/Delete produce a Set.
+    void setGnmiMode(bool on) { m_gnmi = on; }
 
 signals:
     void schemaNodeActivated(const lysc_node *node);
@@ -33,6 +36,7 @@ private:
     void addNodes(QTreeWidgetItem *parent, const lyd_node *first, int depth);
     void showContextMenu(const QPoint &pos);
     int m_count = 0;
+    bool m_gnmi = false;
 };
 
 } // namespace ys

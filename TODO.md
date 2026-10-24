@@ -31,11 +31,16 @@
 - [ ] Jump host / ProxyJump support
 
 ## Phase 3 – gNMI
-- [ ] gRPC/TLS client (gnmi.proto), certificates and insecure mode for labs
-- [ ] Capabilities, Get, Set
-- [ ] Subscribe (ONCE / POLL / STREAM, SAMPLE / ON_CHANGE) with live table
-- [ ] Simple graphs of counter rates
-- [ ] Path completion from the loaded schema
+- [x] gRPC client (gnmi.proto), TLS / mutual TLS / server-name override, insecure mode for labs
+- [x] Capabilities, Get, Set (validated locally with a change preview)
+- [x] Subscribe (ONCE / POLL / STREAM, SAMPLE / ON_CHANGE / TARGET_DEFINED) with live table
+- [x] Graphs of values and counter rates
+- [x] Path completion from the loaded schema
+- [ ] Test against real targets (SR Linux, cEOS, IOS XR, Junos) and fix quirks
+- [ ] union_replace and gNMI extensions (history, commit confirmed, depth)
+- [ ] Export the live table / graph data to CSV
+- [ ] Several subscriptions side by side; alarms on thresholds
+- [ ] origin handling for mixed CLI/OpenConfig targets
 
 ## Later
 - [ ] Datastore and device-to-device diff
