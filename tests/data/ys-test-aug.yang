@@ -1,0 +1,13 @@
+module ys-test-aug {
+  yang-version 1.1;
+  namespace "urn:yangscope:test-aug";
+  prefix ysa;
+
+  import ys-test { prefix yst; }
+
+  revision 2026-10-24;
+
+  augment "/yst:system/yst:server" {
+    leaf comment { type string; }
+  }
+}

@@ -1,0 +1,126 @@
+cmake_minimum_required(VERSION 3.19)
+
+project(YangScope
+    VERSION 0.1.0
+    DESCRIPTION "Native YANG / NETCONF / gNMI explorer"
+    LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_AUTOMOC ON)
+
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+    set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+
+option(YANGSCOPE_BUILD_TESTS "Build the test suite" ON)
+
+find_package(Qt6 6.4 REQUIRED COMPONENTS Core Gui Widgets)
+
+# --- libyang (CESNET) -------------------------------------------------------
+# Supported: libyang 2.1 and newer (tested with 2.1.30 and 6.4.x).
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+    pkg_check_modules(LIBYANG IMPORTED_TARGET libyang>=2.1)
+endif()
+if(LIBYANG_FOUND)
+    add_library(yangscope_libyang INTERFACE)
+    target_link_libraries(yangscope_libyang INTERFACE PkgConfig::LIBYANG)
+else()
+    # Fallback for platforms without pkg-config (e.g. vcpkg on Windows)
+    find_path(LIBYANG_INCLUDE_DIR libyang/libyang.h REQUIRED)
+    find_library(LIBYANG_LIBRARY NAMES yang libyang REQUIRED)
+    add_library(yangscope_libyang INTERFACE)
+    target_include_directories(yangscope_libyang INTERFACE ${LIBYANG_INCLUDE_DIR})
+    target_link_libraries(yangscope_libyang INTERFACE ${LIBYANG_LIBRARY})
+endif()
+
+# The libyang log callback signature changed between major versions;
+# detect which one we have instead of hard-coding version numbers.
+include(CheckCXXSourceCompiles)
+if(LIBYANG_FOUND)
+    set(CMAKE_REQUIRED_INCLUDES ${LIBYANG_INCLUDE_DIRS})
+    set(CMAKE_REQUIRED_LIBRARIES ${LIBYANG_LINK_LIBRARIES})
+else()
+    set(CMAKE_REQUIRED_INCLUDES ${LIBYANG_INCLUDE_DIR})
+    set(CMAKE_REQUIRED_LIBRARIES ${LIBYANG_LIBRARY})
+endif()
+check_cxx_source_compiles("
+#include <libyang/libyang.h>
+static void cb(LY_LOG_LEVEL, const char *, const char *, const char *, uint64_t) {}
+int main() { ly_set_log_clb(cb); return 0; }
+" YANGSCOPE_LY_LOG_CLB_V3)
+# Newer releases expose the directory with libyang's own internal modules.
+check_cxx_source_compiles("
+#include <libyang/libyang.h>
+int main() { return ly_yang_module_dir() != nullptr ? 0 : 1; }
+" YANGSCOPE_HAVE_LY_MODULE_DIR)
+unset(CMAKE_REQUIRED_INCLUDES)
+unset(CMAKE_REQUIRED_LINK_OPTIONS)
+unset(CMAKE_REQUIRED_LIBRARIES)
+
+# --- core library (no GUI) --------------------------------------------------
+add_library(yangscope_core STATIC
+    src/core/YangContext.cpp
+    src/core/YangContext.h
+    src/core/NodeInfo.cpp
+    src/core/NodeInfo.h
+    src/core/LyCompat.h
+)
+target_include_directories(yangscope_core PUBLIC src)
+target_link_libraries(yangscope_core PUBLIC Qt6::Core yangscope_libyang)
+if(YANGSCOPE_LY_LOG_CLB_V3)
+    target_compile_definitions(yangscope_core PRIVATE YANGSCOPE_LY_LOG_CLB_V3=1)
+endif()
+if(YANGSCOPE_HAVE_LY_MODULE_DIR)
+    target_compile_definitions(yangscope_core PRIVATE YANGSCOPE_HAVE_LY_MODULE_DIR=1)
+endif()
+target_compile_definitions(yangscope_core PUBLIC
+    YANGSCOPE_VERSION="${PROJECT_VERSION}")
+
+# --- GUI application --------------------------------------------------------
+qt_add_executable(yangscope
+    src/main.cpp
+    src/gui/MainWindow.cpp
+    src/gui/MainWindow.h
+    src/gui/SchemaModel.cpp
+    src/gui/SchemaModel.h
+    src/gui/YangHighlighter.cpp
+    src/gui/YangHighlighter.h
+    src/gui/SearchPanel.cpp
+    src/gui/SearchPanel.h
+)
+target_link_libraries(yangscope PRIVATE yangscope_core Qt6::Widgets)
+set_target_properties(yangscope PROPERTIES
+    WIN32_EXECUTABLE ON
+    MACOSX_BUNDLE ON
+    MACOSX_BUNDLE_GUI_IDENTIFIER io.github.jkobierczynski.yangscope
+    MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
+    MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION})
+
+if(MSVC)
+    target_compile_options(yangscope_core PRIVATE /W4)
+else()
+    target_compile_options(yangscope_core PRIVATE -Wall -Wextra)
+endif()
+
+include(GNUInstallDirs)
+install(TARGETS yangscope
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    BUNDLE DESTINATION .)
+if(UNIX AND NOT APPLE)
+    install(FILES packaging/yangscope.desktop
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES packaging/yangscope.svg
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps)
+endif()
+
+# --- tests ------------------------------------------------------------------
+if(YANGSCOPE_BUILD_TESTS)
+    enable_testing()
+    add_executable(test_core tests/test_core.cpp)
+    target_link_libraries(test_core PRIVATE yangscope_core)
+    target_compile_definitions(test_core PRIVATE
+        YANGSCOPE_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/tests/data")
+    add_test(NAME core COMMAND test_core)
+endif()

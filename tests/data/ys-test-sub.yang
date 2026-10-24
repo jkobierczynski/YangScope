@@ -1,0 +1,10 @@
+// A submodule: YangScope must skip it when a folder is opened and load it
+// through the include in ys-test instead.
+submodule ys-test-sub {
+  yang-version 1.1;
+  belongs-to ys-test { prefix yst; }
+
+  container extras {
+    leaf note { type string; }
+  }
+}

@@ -1,0 +1,153 @@
+name: Release
+
+# Builds Linux (AppImage), Windows (zip) and macOS (dmg) binaries when a
+# version tag such as v0.1.0 is pushed, and attaches them to a GitHub release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    name: Linux AppImage
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          cache: true
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config libpcre2-dev libgl-dev libfuse2 \
+            libxkbcommon-x11-0 libxcb-cursor0
+      - name: Build libyang
+        run: |
+          TAG=$(git ls-remote --tags --refs https://github.com/CESNET/libyang \
+                | awk -F/ '{print $3}' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          git clone --depth 1 -b "$TAG" https://github.com/CESNET/libyang ly
+          cmake -S ly -B ly/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_TESTS=OFF \
+                -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build ly/build
+          sudo cmake --install ly/build
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+          DESTDIR=$PWD/AppDir cmake --install build
+      - name: Bundle libyang internal modules
+        run: |
+          if [ -d /usr/share/yang/modules/libyang ]; then
+            mkdir -p AppDir/usr/share/yangscope/yang
+            cp -r /usr/share/yang/modules/libyang AppDir/usr/share/yangscope/yang/
+          fi
+      - name: Create AppImage
+        run: |
+          wget -q https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          wget -q https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x linuxdeploy*.AppImage
+          export QMAKE=$(which qmake6 || which qmake)
+          export VERSION=${GITHUB_REF_NAME}
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir \
+            --desktop-file packaging/yangscope.desktop \
+            --icon-file packaging/yangscope.svg \
+            --plugin qt --output appimage
+          mv YangScope*.AppImage YangScope-${GITHUB_REF_NAME}-linux-x86_64.AppImage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: YangScope-*.AppImage
+
+  windows:
+    name: Windows
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.*'
+          arch: win64_msvc2022_64
+          cache: true
+      - name: Install libyang (vcpkg)
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libyang:x64-windows
+      - name: Build
+        shell: pwsh
+        run: |
+          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT"
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$vcpkg\scripts\buildsystems\vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET=x64-windows
+          cmake --build build --config Release
+          $env:PATH = "$vcpkg\installed\x64-windows\bin;$env:PATH"
+          ctest --test-dir build -C Release --output-on-failure
+      - name: Package
+        shell: pwsh
+        run: |
+          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          $dist = "YangScope-$env:GITHUB_REF_NAME-windows-x64"
+          New-Item -ItemType Directory $dist | Out-Null
+          Copy-Item build\Release\yangscope.exe $dist\
+          Copy-Item "$vcpkg\bin\*.dll" $dist\
+          windeployqt --release --no-translations $dist\yangscope.exe
+          if (Test-Path "$vcpkg\share\yang\modules\libyang") {
+            New-Item -ItemType Directory "$dist\yang" | Out-Null
+            Copy-Item -Recurse "$vcpkg\share\yang\modules\libyang" "$dist\yang\libyang"
+          }
+          Copy-Item LICENSE, README.md $dist\
+          Compress-Archive -Path $dist -DestinationPath "$dist.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: YangScope-*.zip
+
+  macos:
+    name: macOS
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: brew install qt libyang pkg-config ninja
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
+          cmake --build build
+          ctest --test-dir build --output-on-failure
+      - name: Package
+        run: |
+          MODS="$(brew --prefix libyang)/share/yang/modules/libyang"
+          if [ -d "$MODS" ]; then
+            mkdir -p build/yangscope.app/Contents/Resources/yang
+            cp -r "$MODS" build/yangscope.app/Contents/Resources/yang/
+          fi
+          "$(brew --prefix qt)/bin/macdeployqt" build/yangscope.app -dmg
+          mv build/yangscope.dmg YangScope-${GITHUB_REF_NAME}-macos-arm64.dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: YangScope-*.dmg
+
+  publish:
+    name: Publish release
+    needs: [linux, windows, macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

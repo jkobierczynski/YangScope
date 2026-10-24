@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=YangScope
+GenericName=YANG Explorer
+Comment=Browse YANG data models, NETCONF and gNMI paths
+Exec=yangscope %F
+Icon=yangscope
+Terminal=false
+Categories=Network;Development;

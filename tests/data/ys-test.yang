@@ -1,0 +1,95 @@
+module ys-test {
+  yang-version 1.1;
+  namespace "urn:yangscope:test";
+  prefix yst;
+
+  include ys-test-sub;
+
+  organization "YangScope project";
+  description "Test module covering the node kinds YangScope displays.";
+
+  revision 2026-10-24 {
+    description "Initial revision.";
+  }
+
+  feature fancy {
+    description "Optional fancy bits.";
+  }
+
+  identity transport;
+  identity tcp { base transport; }
+  identity udp { base transport; }
+
+  typedef port-number {
+    type uint16 {
+      range "1..65535";
+    }
+  }
+
+  container system {
+    description "System settings.";
+    leaf hostname {
+      type string {
+        length "1..63";
+        pattern '[a-zA-Z0-9\-]+';
+      }
+      mandatory true;
+    }
+    leaf mode {
+      type enumeration {
+        enum standalone { value 1; }
+        enum cluster    { value 2; }
+      }
+      default standalone;
+    }
+    container fancy-settings {
+      if-feature fancy;
+      presence "Enables fancy behaviour.";
+      leaf level { type uint8; }
+    }
+    list server {
+      key "name port";
+      leaf name { type string; }
+      leaf port { type port-number; }
+      leaf proto { type identityref { base transport; } }
+      leaf weight {
+        type decimal64 {
+          fraction-digits 2;
+          range "0.00..100.00";
+        }
+        units "percent";
+      }
+      choice address {
+        case ipv4 {
+          leaf v4 { type string; }
+        }
+        case ipv6 {
+          leaf v6 { type string; }
+        }
+      }
+      action restart {
+        input {
+          leaf delay { type uint32; }
+        }
+      }
+    }
+    container status {
+      config false;
+      leaf uptime { type uint64; units "seconds"; }
+      leaf-list alarms { type string; }
+    }
+  }
+
+  rpc reboot {
+    input {
+      leaf delay { type uint32; default 0; }
+    }
+    output {
+      leaf scheduled-at { type string; }
+    }
+  }
+
+  notification booted {
+    leaf reason { type string; }
+  }
+}
