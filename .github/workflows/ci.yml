@@ -15,9 +15,11 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build g++ pkg-config qt6-base-dev libgl-dev libyang2-dev libssh-dev python3-paramiko
+            cmake ninja-build g++ pkg-config qt6-base-dev libgl-dev libyang2-dev libssh-dev python3-paramiko libgrpc++-dev protobuf-compiler-grpc libprotobuf-dev protobuf-compiler
+      - name: Python packages for the gNMI test server
+        run: pip install --break-system-packages grpcio grpcio-tools cryptography
       - name: Configure
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DYANGSCOPE_WITH_GNMI=ON
       - name: Build
         run: cmake --build build
       - name: Test
@@ -32,7 +34,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            cmake ninja-build g++ pkg-config qt6-base-dev libgl-dev libpcre2-dev libssh-dev python3-paramiko
+            cmake ninja-build g++ pkg-config qt6-base-dev libgl-dev libpcre2-dev libssh-dev python3-paramiko libgrpc++-dev protobuf-compiler-grpc libprotobuf-dev protobuf-compiler
+      - name: Python packages for the gNMI test server
+        run: pip install --break-system-packages grpcio grpcio-tools cryptography
       - name: Build libyang (latest release tag)
         run: |
           TAG=$(git ls-remote --tags --refs https://github.com/CESNET/libyang \
@@ -46,10 +50,27 @@ jobs:
       - name: Configure
         run: |
           PKG_CONFIG_PATH=$HOME/ly/lib/pkgconfig:$HOME/ly/lib64/pkgconfig \
-            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+            cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DYANGSCOPE_WITH_GNMI=ON
       - name: Build
         run: cmake --build build
       - name: Test
         run: |
           export LD_LIBRARY_PATH=$HOME/ly/lib:$HOME/ly/lib64
           ctest --test-dir build --output-on-failure
+
+  linux-without-gnmi:
+    name: Linux (without gRPC, NETCONF only)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build g++ pkg-config qt6-base-dev libgl-dev libyang2-dev libssh-dev python3-paramiko
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DYANGSCOPE_WITH_GNMI=OFF
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

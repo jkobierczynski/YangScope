@@ -1,0 +1,50 @@
+{
+  "ys-test:system": {
+    "hostname": "lab-router-1",
+    "mode": "cluster",
+    "server": [
+      {
+        "name": "ntp1",
+        "port": 123,
+        "proto": "udp",
+        "weight": "60.00",
+        "v4": "192.0.2.10",
+        "ys-test-aug:comment": "primary"
+      },
+      {
+        "name": "ntp2",
+        "port": 123,
+        "proto": "udp",
+        "weight": "40.00",
+        "v6": "2001:db8::10"
+      }
+    ]
+  },
+  "ietf-interfaces:interfaces": {
+    "interface": [
+      {
+        "name": "eth0",
+        "description": "uplink to core-1",
+        "type": "iana-if-type:ethernetCsmacd",
+        "enabled": true,
+        "ietf-ip:ipv4": {
+          "mtu": 1500,
+          "address": [
+            {"ip": "192.0.2.1", "prefix-length": 24}
+          ]
+        }
+      },
+      {
+        "name": "eth1",
+        "description": "OT cell zone 3 conduit",
+        "type": "iana-if-type:ethernetCsmacd",
+        "enabled": false
+      },
+      {
+        "name": "lo",
+        "type": "iana-if-type:softwareLoopback",
+        "enabled": true
+      }
+    ]
+  }
+}

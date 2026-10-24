@@ -76,6 +76,47 @@ bool DataTree::parseXml(const ly_ctx *ctx, const QByteArray &xml)
     return true;
 }
 
+bool DataTree::parseJson(const ly_ctx *ctx, const QByteArray &json)
+{
+    clear();
+    m_messages.clear();
+    if (!ctx)
+        return false;
+    if (json.trimmed().isEmpty() || json.trimmed() == "{}")
+        return true;
+    LyLogCapture cap(&m_messages);
+    const LY_ERR err = lyd_parse_data_mem(ctx, json.constData(), LYD_JSON,
+                                          LYD_PARSE_ONLY | LYD_PARSE_OPAQ, 0, &m_root);
+    if (err != LY_SUCCESS) {
+        clear();
+        if (m_messages.isEmpty())
+            m_messages << QStringLiteral("error: could not parse JSON data (libyang error %1)").arg(int(err));
+        return false;
+    }
+    return true;
+}
+
+bool DataTree::mergeTree(lyd_node *first)
+{
+    if (!first)
+        return true;
+    if (!m_root) {
+        m_root = first;
+        return true;
+    }
+    LyLogCapture cap(&m_messages);
+    const bool ok = lyd_merge_siblings(&m_root, first, LYD_MERGE_DESTRUCT) == LY_SUCCESS;
+    if (!ok)
+        lyd_free_all(first);
+    return ok;
+}
+
+void DataTree::reset()
+{
+    clear();
+    m_messages.clear();
+}
+
 QString DataTree::toJson() const
 {
     if (!m_root)

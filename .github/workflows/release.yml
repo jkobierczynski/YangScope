@@ -10,6 +10,10 @@ on:
 permissions:
   contents: write
 
+env:
+  # libyang version built from source on Windows (vcpkg has no port)
+  LIBYANG_VERSION: '6.4.13'
+
 jobs:
   linux:
     name: Linux AppImage
@@ -26,6 +30,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build g++ pkg-config libpcre2-dev libgl-dev libfuse2 libssh-dev python3-paramiko \
+            libgrpc++-dev protobuf-compiler-grpc libprotobuf-dev protobuf-compiler \
             libxkbcommon-x11-0 libxcb-cursor0
       - name: Build libyang
         run: |
@@ -36,9 +41,12 @@ jobs:
                 -DCMAKE_INSTALL_PREFIX=/usr
           cmake --build ly/build
           sudo cmake --install ly/build
+      - name: Python packages for the gNMI test server
+        run: pip install grpcio grpcio-tools cryptography
       - name: Build
         run: |
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+                -DYANGSCOPE_WITH_GNMI=ON
           cmake --build build
           ctest --test-dir build --output-on-failure
           DESTDIR=$PWD/AppDir cmake --install build
@@ -76,32 +84,62 @@ jobs:
           version: '6.8.*'
           arch: win64_msvc2022_64
           cache: true
-      - name: Install libyang (vcpkg)
+      # gRPC from vcpkg is a long build; the cache keeps later releases fast.
+      - name: Cache vcpkg packages
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-${{ runner.os }}-libssh-grpc-libyangdeps-v2
+      # vcpkg has no libyang port: install the dependencies libyang's own
+      # Windows CI uses, then build libyang from source below.
+      - name: Install libssh, gRPC and libyang dependencies (vcpkg)
         shell: pwsh
         run: |
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install libyang:x64-windows libssh:x64-windows
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install --triplet=x64-windows `
+            libssh grpc pcre2 pthreads dirent dlfcn-win32 xxhash
+      - name: Cache libyang
+        id: cache-libyang
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}\libyang
+          key: libyang-${{ env.LIBYANG_VERSION }}-${{ runner.os }}-v1
+      - name: Build libyang ${{ env.LIBYANG_VERSION }}
+        if: steps.cache-libyang.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $vcpkg = "$env:VCPKG_INSTALLATION_ROOT"
+          git clone --depth 1 --branch "v$env:LIBYANG_VERSION" https://github.com/CESNET/libyang.git "$env:RUNNER_TEMP\libyang-src"
+          cmake -S "$env:RUNNER_TEMP\libyang-src" -B "$env:RUNNER_TEMP\libyang-build" -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_TOOLCHAIN_FILE="$vcpkg\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows `
+            -DCMAKE_BUILD_TYPE=Release -DENABLE_TESTS=OFF -DENABLE_TOOLS=OFF -DENABLE_COMMON_TARGETS=OFF `
+            -DCMAKE_INSTALL_PREFIX="$env:RUNNER_TEMP\libyang"
+          cmake --build "$env:RUNNER_TEMP\libyang-build" --config Release
+          cmake --install "$env:RUNNER_TEMP\libyang-build" --config Release
       - name: Build
         shell: pwsh
         run: |
           $vcpkg = "$env:VCPKG_INSTALLATION_ROOT"
+          $ly = "$env:RUNNER_TEMP\libyang"
           cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_TOOLCHAIN_FILE="$vcpkg\scripts\buildsystems\vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows
+            -DVCPKG_TARGET_TRIPLET=x64-windows -DCMAKE_PREFIX_PATH="$ly" -DYANGSCOPE_WITH_GNMI=ON
           cmake --build build --config Release
-          $env:PATH = "$vcpkg\installed\x64-windows\bin;$env:PATH"
+          $env:PATH = "$ly\bin;$vcpkg\installed\x64-windows\bin;$env:PATH"
           ctest --test-dir build -C Release --output-on-failure
       - name: Package
         shell: pwsh
         run: |
           $vcpkg = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          $ly = "$env:RUNNER_TEMP\libyang"
           $dist = "YangScope-$env:GITHUB_REF_NAME-windows-x64"
           New-Item -ItemType Directory $dist | Out-Null
           Copy-Item build\Release\yangscope.exe $dist\
           Copy-Item "$vcpkg\bin\*.dll" $dist\
+          Copy-Item "$ly\bin\*.dll" $dist\
           windeployqt --release --no-translations $dist\yangscope.exe
-          if (Test-Path "$vcpkg\share\yang\modules\libyang") {
+          if (Test-Path "$ly\share\yang\modules\libyang") {
             New-Item -ItemType Directory "$dist\yang" | Out-Null
-            Copy-Item -Recurse "$vcpkg\share\yang\modules\libyang" "$dist\yang\libyang"
+            Copy-Item -Recurse "$ly\share\yang\modules\libyang" "$dist\yang\libyang"
           }
           Copy-Item LICENSE, README.md $dist\
           Compress-Archive -Path $dist -DestinationPath "$dist.zip"
@@ -116,11 +154,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
-        run: brew install qt libyang libssh pkg-config ninja
+        run: |
+          brew install qt libyang libssh grpc protobuf pkg-config ninja
+          pip3 install --break-system-packages grpcio grpcio-tools cryptography || true
       - name: Build
         run: |
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
+                -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DYANGSCOPE_WITH_GNMI=ON
           cmake --build build
           ctest --test-dir build --output-on-failure
       - name: Package

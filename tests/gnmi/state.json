@@ -1,0 +1,39 @@
+{
+  "ys-test:system": {
+    "status": {
+      "uptime": "86400",
+      "alarms": ["fan-tray-2 degraded", "psu-1 redundancy lost"]
+    }
+  },
+  "ietf-interfaces:interfaces": {
+    "interface": [
+      {
+        "name": "eth0",
+        "oper-status": "up",
+        "if-index": 2,
+        "phys-address": "52:54:00:12:34:56",
+        "speed": "1000000000",
+        "statistics": {
+          "discontinuity-time": "2026-10-01T08:00:00+02:00",
+          "in-octets": "918273645",
+          "in-unicast-pkts": "812345",
+          "in-errors": 3,
+          "out-octets": "123456789",
+          "out-unicast-pkts": "654321"
+        }
+      },
+      {
+        "name": "eth1",
+        "oper-status": "down",
+        "if-index": 3,
+        "statistics": {"discontinuity-time": "2026-10-01T08:00:00+02:00"}
+      },
+      {
+        "name": "lo",
+        "oper-status": "up",
+        "if-index": 1,
+        "statistics": {"discontinuity-time": "2026-10-01T08:00:00+02:00"}
+      }
+    ]
+  }
+}

@@ -3,6 +3,9 @@
 
 #include "core/NodeInfo.h"
 #include "gui/NetconfPanel.h"
+#ifdef YANGSCOPE_HAVE_GNMI
+#include "gui/GnmiPanel.h"
+#endif
 #include "gui/SchemaModel.h"
 #include "gui/SearchPanel.h"
 #include "gui/YangHighlighter.h"
@@ -81,8 +84,7 @@ MainWindow::~MainWindow()
 {
     // Child widgets are destroyed after our members, so release everything
     // that holds libyang data or schema pointers while the context still exists.
-    if (m_netconf)
-        m_netconf->contextAboutToReset();
+    releaseSchemaUsers();
     if (m_model)
         m_model->clear();
 }
@@ -183,6 +185,29 @@ void MainWindow::buildUi()
         }
     });
     connect(m_netconf, &NetconfPanel::deviceSchemasReady, this, &MainWindow::loadDeviceModules);
+#ifdef YANGSCOPE_HAVE_GNMI
+    m_gnmi = new GnmiPanel(m_ctx, this);
+    m_gnmiDock = new QDockWidget(tr("gNMI"), this);
+    m_gnmiDock->setObjectName(QStringLiteral("gnmiDock"));
+    m_gnmiDock->setWidget(m_gnmi);
+    addDockWidget(Qt::BottomDockWidgetArea, m_gnmiDock);
+    tabifyDockWidget(m_netconfDock, m_gnmiDock);
+    connect(m_gnmi, &GnmiPanel::logLines, this, [this](const QStringList &l) { log(l); });
+    connect(m_gnmi, &GnmiPanel::statusMessage, this,
+            [this](const QString &m) { statusBar()->showMessage(m, 6000); });
+    connect(m_gnmi, &GnmiPanel::copyRequested, this, &MainWindow::copyToClipboard);
+    connect(m_gnmi, &GnmiPanel::schemaNodeActivated, this, [this](const lysc_node *n) {
+        const QModelIndex idx = m_model->indexForNode(n);
+        if (idx.isValid()) {
+            const QSignalBlocker b(m_tree->selectionModel());
+            m_tree->setCurrentIndex(idx);
+            m_tree->scrollTo(idx);
+            showNode(n);
+        }
+    });
+    connect(m_gnmi, &GnmiPanel::loadModelsRequested, this, &MainWindow::loadGnmiModels);
+    connect(m_gnmi, &GnmiPanel::connectionChanged, this, [this] { updateDeviceActions(); });
+#endif
     connect(m_netconf, &NetconfPanel::connectionChanged, this, [this](bool on) {
         setWindowTitle(on ? QStringLiteral("YangScope - %1").arg(m_netconf->deviceLabel().section(QLatin1Char(' '), 0, 0))
                           : QStringLiteral("YangScope"));
@@ -227,6 +252,9 @@ void MainWindow::buildMenus()
     view->addAction(m_logDock->toggleViewAction());
 
     view->addAction(m_netconfDock->toggleViewAction());
+#ifdef YANGSCOPE_HAVE_GNMI
+    view->addAction(m_gnmiDock->toggleViewAction());
+#endif
 
     QMenu *dev = menuBar()->addMenu(tr("&Device"));
     m_connectAct = dev->addAction(tr("&Connect..."), this, [this] {
@@ -243,6 +271,22 @@ void MainWindow::buildMenus()
     m_getAct->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_G));
     m_getConfigAct = dev->addAction(tr("Get-&Config Selected Node"), this, [this] { netconfForSelection(true); });
     m_getConfigAct->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_G));
+#ifdef YANGSCOPE_HAVE_GNMI
+    dev->addSeparator();
+    m_gnmiConnectAct = dev->addAction(tr("gNMI Co&nnect..."), this, [this] {
+        m_gnmiDock->show();
+        m_gnmiDock->raise();
+        m_gnmi->connectDialog();
+    });
+    m_gnmiConnectAct->setIconText(tr("gNMI"));
+    m_gnmiDisconnectAct = dev->addAction(tr("gNMI Disconnect"), m_gnmi, &GnmiPanel::disconnectTarget);
+    m_gnmiGetAct = dev->addAction(tr("gNMI Get Selected Node"), this, [this] { gnmiForSelection(int(GnmiPanel::Op::Get)); });
+    m_gnmiSubAct = dev->addAction(tr("gNMI &Subscribe to Selected Node"), this,
+                                  [this] { gnmiForSelection(int(GnmiPanel::Op::Subscribe)); });
+#else
+    dev->addSeparator();
+    dev->addAction(tr("gNMI: not available in this build"))->setEnabled(false);
+#endif
     updateDeviceActions();
 
     QMenu *opts = menuBar()->addMenu(tr("&Options"));
@@ -283,6 +327,9 @@ void MainWindow::buildMenus()
     tb->addSeparator();
     tb->addAction(m_connectAct);
     tb->addAction(m_getAct);
+#ifdef YANGSCOPE_HAVE_GNMI
+    tb->addAction(m_gnmiConnectAct);
+#endif
 
     updateRecentMenu();
 }
@@ -362,6 +409,11 @@ void MainWindow::loadFiles(const QStringList &files)
         return;
     }
 
+    // Implementing new modules recompiles the context, which invalidates
+    // compiled schema pointers held by the tree and the reply views.
+    releaseSchemaUsers();
+    m_model->clear();
+
     QProgressDialog progress(tr("Loading YANG modules..."), tr("Cancel"), 0, int(files.size()), this);
     progress.setWindowModality(Qt::WindowModal);
     progress.setMinimumDuration(400);
@@ -409,10 +461,20 @@ void MainWindow::loadFiles(const QStringList &files)
     refreshAfterLoad(summary);
 }
 
+void MainWindow::releaseSchemaUsers()
+{
+    if (m_netconf)
+        m_netconf->contextAboutToReset();
+#ifdef YANGSCOPE_HAVE_GNMI
+    if (m_gnmi)
+        m_gnmi->contextAboutToReset();
+#endif
+}
+
 void MainWindow::resetContext()
 {
     // Everything holding schema pointers must let go first.
-    m_netconf->contextAboutToReset();
+    releaseSchemaUsers();
     m_model->clear();
     m_shownModule = nullptr;
     m_ctx.reset();
@@ -462,11 +524,11 @@ void MainWindow::loadDeviceModules(const netconf::SchemaSyncResult &res, const Q
         } else if (box.clickedButton() != static_cast<QAbstractButton *>(add)) {
             return;
         } else {
-            m_netconf->contextAboutToReset();
+            releaseSchemaUsers();
             m_model->clear();
         }
     } else {
-        m_netconf->contextAboutToReset();
+        releaseSchemaUsers();
         m_model->clear();
     }
     DeviceSpec spec;
@@ -480,7 +542,8 @@ void MainWindow::loadDeviceModules(const netconf::SchemaSyncResult &res, const Q
 
 void MainWindow::loadDeviceSpec(const DeviceSpec &spec)
 {
-    m_ctx.addSearchDir(spec.cacheDir, false);
+    if (!spec.cacheDir.isEmpty())
+        m_ctx.addSearchDir(spec.cacheDir, false);
     int ok = 0;
     QStringList failed;
     for (const netconf::DeviceModule &m : spec.modules) {
@@ -585,13 +648,123 @@ void MainWindow::updateDeviceActions()
     m_deviceSchemasAct->setEnabled(on);
     m_getAct->setEnabled(on);
     m_getConfigAct->setEnabled(on);
+#ifdef YANGSCOPE_HAVE_GNMI
+    const bool g = m_gnmi->isConnected();
+    m_gnmiConnectAct->setEnabled(!g);
+    m_gnmiDisconnectAct->setEnabled(g);
+    m_gnmiGetAct->setEnabled(g);
+    m_gnmiSubAct->setEnabled(g);
+#endif
 }
+
+#ifdef YANGSCOPE_HAVE_GNMI
+void MainWindow::gnmiForSelection(int opInt)
+{
+    const GnmiPanel::Op op = GnmiPanel::Op(opInt);
+    const QModelIndex idx = m_tree->currentIndex();
+    m_gnmiDock->show();
+    m_gnmiDock->raise();
+    m_gnmi->prepareFor(idx.isValid() ? m_model->nodeAt(idx) : nullptr, op, op != GnmiPanel::Op::Set);
+}
+
+void MainWindow::loadGnmiModels(const QVector<gnmi::ModelData> &models, const QString &target)
+{
+    static const QRegularExpression date(QStringLiteral("^\\d{4}-\\d{2}-\\d{2}$"));
+    releaseSchemaUsers();
+    m_model->clear();
+    int ok = 0;
+    QStringList missing;
+    for (const gnmi::ModelData &m : models) {
+        // OpenConfig versions are semantic versions, not YANG revisions
+        const QString rev = date.match(m.version).hasMatch() ? m.version : QString();
+        LoadResult r = m_ctx.loadModule(m.name, rev);
+        if (!r.ok && !rev.isEmpty())
+            r = m_ctx.loadModule(m.name); // any revision we have
+        if (r.ok)
+            ++ok;
+        else
+            missing << m.name + (m.version.isEmpty() ? QString() : QLatin1Char('@') + m.version);
+    }
+    QString summary = tr("Loaded %1 of %n model(s) listed by %2", nullptr, int(models.size())).arg(ok).arg(target);
+    QStringList lines{summary};
+    if (!missing.isEmpty()) {
+        lines << tr("  not found in the search directories (File > Add Search Directory): %1")
+                     .arg(missing.join(QStringLiteral(", ")));
+        summary += tr(", %n missing (see Messages)", nullptr, int(missing.size()));
+        m_logDock->show();
+        m_logDock->raise();
+    }
+    log(lines);
+    refreshAfterLoad(summary);
+}
+
+void MainWindow::gnmiFromCommandLine(const QString &target, bool insecure, const QString &caFile,
+                                     const QString &serverName, bool loadModels, const QString &path,
+                                     bool get, bool subscribe)
+{
+    static const QRegularExpression re(QStringLiteral("^(?:([^@]+)@)?(\\[[^\\]]+\\]|[^:]+)(?::(\\d+))?$"));
+    const auto m = re.match(target);
+    if (!m.hasMatch()) {
+        log(tr("error: cannot parse --gnmi target \"%1\" (expected [user@]host[:port])").arg(target));
+        return;
+    }
+    gnmi::ConnectParams p;
+    p.username = m.captured(1);
+    p.host = m.captured(2);
+    if (p.host.startsWith(QLatin1Char('[')))
+        p.host = p.host.mid(1, p.host.size() - 2);
+    p.port = m.captured(3).isEmpty() ? 57400 : m.captured(3).toInt();
+    p.tls = insecure ? gnmi::TlsMode::Insecure : gnmi::TlsMode::Tls;
+    p.caFile = caFile;
+    p.serverName = serverName;
+    const QByteArray envPw = qgetenv("YANGSCOPE_GNMI_PASSWORD");
+    if (!envPw.isEmpty()) {
+        p.password = QString::fromUtf8(envPw);
+    } else if (!p.username.isEmpty()) {
+        bool ok = false;
+        p.password = QInputDialog::getText(this, tr("gNMI"), tr("Password for %1@%2:").arg(p.username, p.host),
+                                           QLineEdit::Password, QString(), &ok);
+        if (!ok)
+            return;
+    }
+    auto *once = new QMetaObject::Connection;
+    *once = connect(m_gnmi, &GnmiPanel::connectionChanged, this,
+                    [this, once, loadModels, path, get, subscribe](bool on) {
+        disconnect(*once);
+        delete once;
+        if (!on)
+            return;
+        if (loadModels)
+            loadGnmiModels(m_gnmi->capabilities().models, m_gnmi->targetLabel());
+        if (!path.isEmpty())
+            selectPath(path);
+        if (get)
+            gnmiForSelection(int(GnmiPanel::Op::Get));
+        else if (subscribe)
+            gnmiForSelection(int(GnmiPanel::Op::Subscribe));
+    });
+    m_gnmiDock->show();
+    m_gnmiDock->raise();
+    m_gnmi->connectTo(p, QString());
+}
+#else
+void MainWindow::gnmiForSelection(int) {}
+void MainWindow::loadGnmiModels(const QVector<gnmi::ModelData> &, const QString &) {}
+void MainWindow::gnmiFromCommandLine(const QString &, bool, const QString &, const QString &, bool,
+                                     const QString &, bool, bool)
+{
+    log(tr("error: this build of YangScope has no gNMI support"));
+}
+#endif
 
 void MainWindow::refreshAfterLoad(const QString &summary)
 {
     m_model->rebuild(m_ctx, m_internalAct->isChecked());
     m_search->invalidate();
     m_netconf->contextChanged();
+#ifdef YANGSCOPE_HAVE_GNMI
+    m_gnmi->contextChanged();
+#endif
     m_shownModule = nullptr;
     m_details->setHtml(m_model->moduleCount() == 0
         ? tr("<h2>No modules loaded</h2>"
@@ -617,6 +790,9 @@ void MainWindow::onCurrentChanged()
 {
     const QModelIndex idx = m_tree->currentIndex();
     m_netconf->setSelectedNode(idx.isValid() ? m_model->nodeAt(idx) : nullptr);
+#ifdef YANGSCOPE_HAVE_GNMI
+    m_gnmi->setSelectedNode(idx.isValid() ? m_model->nodeAt(idx) : nullptr);
+#endif
     if (!idx.isValid())
         return;
     if (const lysc_node *n = m_model->nodeAt(idx))
@@ -715,6 +891,24 @@ void MainWindow::showTreeContextMenu(const QPoint &pos)
             m_netconfDock->raise();
             m_netconf->sendFor(n, NetconfPanel::Op::GetConfig);
         })->setEnabled(on && !subtreeFilter(n).isEmpty() && access(n) == Access::ReadWrite);
+#ifdef YANGSCOPE_HAVE_GNMI
+        const bool g = m_gnmi->isConnected();
+        menu.addAction(tr("gNMI Get"), this, [this, n] {
+            m_gnmiDock->show();
+            m_gnmiDock->raise();
+            m_gnmi->prepareFor(n, GnmiPanel::Op::Get, true);
+        })->setEnabled(g && !(n->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF)));
+        menu.addAction(tr("gNMI Subscribe"), this, [this, n] {
+            m_gnmiDock->show();
+            m_gnmiDock->raise();
+            m_gnmi->prepareFor(n, GnmiPanel::Op::Subscribe, false);
+        })->setEnabled(!(n->nodetype & (LYS_RPC | LYS_ACTION | LYS_NOTIF)));
+        menu.addAction(tr("gNMI Set..."), this, [this, n] {
+            m_gnmiDock->show();
+            m_gnmiDock->raise();
+            m_gnmi->prepareFor(n, GnmiPanel::Op::Set, false);
+        })->setEnabled(access(n) == Access::ReadWrite);
+#endif
         menu.addAction(tr("NETCONF Edit-Config..."), this, [this, n] {
             m_netconfDock->show();
             m_netconfDock->raise();
@@ -808,6 +1002,10 @@ void MainWindow::applyThemeColors()
     m_treeHl->updateColors(dark);
     if (m_netconf)
         m_netconf->applyThemeColors(dark);
+#ifdef YANGSCOPE_HAVE_GNMI
+    if (m_gnmi)
+        m_gnmi->applyThemeColors(dark);
+#endif
 }
 
 void MainWindow::changeEvent(QEvent *e)
@@ -842,6 +1040,9 @@ void MainWindow::closeEvent(QCloseEvent *e)
     s.setValue(QStringLiteral("window/state"), saveState());
     s.setValue(QStringLiteral("window/splitter"), m_splitter->saveState());
     m_netconf->disconnectDevice();
+#ifdef YANGSCOPE_HAVE_GNMI
+    m_gnmi->disconnectTarget();
+#endif
     QMainWindow::closeEvent(e);
 }
 
@@ -849,7 +1050,7 @@ void MainWindow::about()
 {
     QMessageBox::about(this, tr("About YangScope"),
         tr("<h3>YangScope %1</h3>"
-           "<p>A native YANG schema explorer and NETCONF client; gNMI support is planned.</p>"
+           "<p>A native YANG schema explorer with NETCONF and gNMI clients.</p>"
            "<p>Built with Qt %2 and libyang %3 (CESNET).</p>"
            "<p>Licensed under the GNU GPL v3 or later.</p>")
             .arg(QStringLiteral(YANGSCOPE_VERSION), QString::fromLatin1(qVersion()),

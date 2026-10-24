@@ -126,10 +126,17 @@ void DataTreeWidget::showContextMenu(const QPoint &pos)
             menu.addAction(text, this, [this, node, a] { emit entryAction(node, a); })->setEnabled(enabled);
         };
         const bool config = !(sch->flags & LYS_CONFIG_R);
-        act(tr("Filter on This Entry"), EntryAction::FilterSubtree, true);
-        act(tr("Filter on This Entry (XPath)"), EntryAction::FilterXPath, true);
-        act(tr("Edit This Entry..."), EntryAction::Edit, config);
-        act(tr("Delete This Entry..."), EntryAction::Delete, config && !(sch->flags & LYS_KEY));
+        if (m_gnmi) {
+            act(tr("Get This Entry"), EntryAction::FilterSubtree, true);
+            act(tr("Subscribe to This Entry"), EntryAction::FilterXPath, true);
+            act(tr("Edit This Entry (Set)..."), EntryAction::Edit, config);
+            act(tr("Delete This Entry (Set)..."), EntryAction::Delete, config && !(sch->flags & LYS_KEY));
+        } else {
+            act(tr("Filter on This Entry"), EntryAction::FilterSubtree, true);
+            act(tr("Filter on This Entry (XPath)"), EntryAction::FilterXPath, true);
+            act(tr("Edit This Entry..."), EntryAction::Edit, config);
+            act(tr("Delete This Entry..."), EntryAction::Delete, config && !(sch->flags & LYS_KEY));
+        }
     }
     menu.addSeparator();
     menu.addAction(tr("Expand All"), this, &QTreeWidget::expandAll);

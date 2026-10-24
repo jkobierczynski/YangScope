@@ -8,10 +8,43 @@ A native desktop explorer for YANG data models, written in C++ with Qt 6 and
 Existing YANG explorers are either web applications (YANG Suite, ANX,
 Netopeer2GUI), Java-based (ANX), abandoned (Cisco yang-explorer, which needed
 Flash) or offline-only. YangScope is a fast native tool for Linux, Windows and
-macOS: browse schemas offline, then connect to a device over NETCONF and look
-at its real configuration and state. gNMI is next.
+macOS: browse schemas offline, then connect to a device over NETCONF or gNMI,
+read its configuration and state, change it with local validation first, and
+watch streaming telemetry.
 
 ## Status
+
+**gNMI client (v0.4)**
+
+![Streaming eth0 counters over gNMI](docs/gnmi-live.png)
+
+- **Connect** over TLS (CA file or system trust store, optional client
+  certificate for mutual TLS, TLS server-name override) or, for labs, without
+  TLS. Username and password go in the call metadata, as devices expect.
+  Target profiles are saved; passwords never are.
+- **Capabilities:** gNMI version, encodings and models; *Load Matching
+  Schemas* loads the listed models from your search directories (gNMI has no
+  schema download, unlike NETCONF).
+- **Get** with any path (completion from the loaded schemas), data type
+  (ALL/CONFIG/STATE/OPERATIONAL) and encoding (JSON_IETF, JSON, PROTO, ASCII).
+  Updates are placed into a typed libyang data tree whatever the target sends:
+  container JSON, list arrays, wildcard results or single scalars, with or
+  without module prefixes. Anything that does not fit the schemas stays visible
+  in the Updates tab.
+- **Set** written as `update`/`replace`/`delete` lines with JSON_IETF values,
+  **validated locally before sending**: values against the schemas, then the
+  resulting configuration (fetched with Get CONFIG) with mandatory, must/when,
+  leafref and unique checks, in gNMI's order (deletes, replaces, updates).
+  The same change preview as for NETCONF comes before anything is sent.
+- **Subscribe** STREAM (SAMPLE, ON_CHANGE, TARGET_DEFINED), ONCE or POLL, with
+  suppress-redundant and updates-only. The Live tab shows every path with its
+  value, rate per second (from the target's timestamps) and update count, and
+  graphs the selected value, or its rate for counters.
+- From the Data tab: *Get This Entry*, *Subscribe to This Entry*, *Edit This
+  Entry (Set)* and *Delete This Entry (Set)*.
+- Optional at build time: without gRPC, YangScope builds with NETCONF only.
+
+![Set validated locally before sending](docs/gnmi-set.png)
 
 **Changing configuration (v0.3)**
 
@@ -94,8 +127,8 @@ at its real configuration and state. gNMI is next.
 - Loads the complete OpenConfig model set (177 modules) in a few seconds.
 
 **Planned** – see [TODO.md](TODO.md): editing values directly in the data tree,
-NMDA `get-data`, notifications, gNMI Capabilities/Get/Subscribe with live values
-and graphs.
+NMDA `get-data`, NETCONF notifications, gNMI union_replace and extensions,
+exporting live data.
 
 ## Usage
 
@@ -109,6 +142,12 @@ yangscope [options] [files or folders...]
   -c, --connect <target> Connect to a NETCONF device: [user@]host[:port]
       --device-schemas   After connecting, download and load the device's schemas
       --get              After connecting, send a get for the --select node
+      --gnmi <target>    Connect to a gNMI target: [user@]host[:port] (default 57400)
+      --gnmi-insecure    gNMI without TLS (labs only)
+      --gnmi-ca <file>   CA certificate (PEM) for gNMI TLS
+      --gnmi-server-name <name>  Name to verify in the target's certificate
+      --gnmi-schemas     After connecting, load the target's models from the search directories
+      --subscribe        After connecting (gNMI), subscribe to the --select node
 ```
 
 Connecting from the command line asks for the password (leave it empty to use
@@ -119,7 +158,14 @@ SSH keys). For scripts, `YANGSCOPE_NETCONF_PASSWORD` and
 ```
 yangscope --connect admin@r1.lab:830 --device-schemas \
   -s /ietf-interfaces:interfaces/interface --get
+
+# gNMI: OpenConfig models from a checkout, TLS with the lab CA
+yangscope -r -p openconfig/release/models -p openconfig/third_party \
+  --gnmi admin@leaf1.lab:57400 --gnmi-ca lab-ca.pem --gnmi-schemas \
+  -s /openconfig-interfaces:interfaces/interface/state/counters --subscribe
 ```
+
+`YANGSCOPE_GNMI_PASSWORD` sets the gNMI password for scripts.
 
 Example with the OpenConfig repository:
 
@@ -135,21 +181,23 @@ All Features**), so `if-feature` guarded nodes are visible.
 ## Building
 
 Requirements: CMake ≥ 3.19, a C++17 compiler, Qt ≥ 6.4 (Core, Gui, Widgets),
-libyang ≥ 2.1 and libssh ≥ 0.9. YangScope is tested with libyang 2.1.30 (Ubuntu 24.04
+libyang ≥ 2.1 and libssh ≥ 0.9; for gNMI also gRPC C++ and protobuf.
+`-DYANGSCOPE_WITH_GNMI=AUTO|ON|OFF` (default AUTO: gNMI when gRPC is found). YangScope is tested with libyang 2.1.30 (Ubuntu 24.04
 package) and libyang 6.4; API differences between versions are detected at
 configure time.
 
 ### Linux (Debian/Ubuntu)
 
 ```
-sudo apt install cmake g++ pkg-config qt6-base-dev libgl-dev libyang2-dev libssh-dev
+sudo apt install cmake g++ pkg-config qt6-base-dev libgl-dev libyang2-dev libssh-dev \
+  libgrpc++-dev protobuf-compiler-grpc libprotobuf-dev protobuf-compiler
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build
 ./build/yangscope
 ```
 
-Fedora/RHEL: `dnf install cmake gcc-c++ qt6-qtbase-devel libyang-devel libssh-devel`.
+Fedora/RHEL: `dnf install cmake gcc-c++ qt6-qtbase-devel libyang-devel libssh-devel grpc-devel grpc-plugins protobuf-devel`.
 
 The NETCONF and GUI tests start a small Python test server
 (`tests/netconf/test_server.py`, needs `paramiko`); without it they are
@@ -164,19 +212,32 @@ python3 tests/netconf/test_server.py --schemas tests/data --schemas tests/netcon
 It keeps running and candidate datastores in memory, so edits, locks and
 (confirmed) commits behave like on a device until it is restarted.
 
+The gNMI tests use `tests/gnmi/test_server.py` (needs `grpcio`, `grpcio-tools`
+and `cryptography`), which serves the same models as RFC 7951 JSON, applies
+Sets, and makes the eth0 counters grow for streaming:
+
+```
+python3 tests/gnmi/test_server.py --port 57400 --user admin --password admin
+python3 tests/gnmi/test_server.py --port 57400 --tls /tmp/certs   # writes ca.pem, server and client certs
+```
+
+Load `tests/data` and `tests/netconf/ietf` as search directories, then connect
+with *Device → gNMI Connect* (insecure, or TLS with `/tmp/certs/ca.pem`).
+
 ### macOS
 
 ```
-brew install qt libyang libssh pkg-config
+brew install qt libyang libssh grpc protobuf pkg-config
 cmake -S . -B build -DCMAKE_PREFIX_PATH="$(brew --prefix qt)"
 cmake --build build -j
 ```
 
 ### Windows
 
-Install Qt 6 (MSVC 2022 build), and libyang and libssh through vcpkg
-(`vcpkg install libyang:x64-windows libssh:x64-windows`), then configure with
-the vcpkg toolchain file:
+Install Qt 6 (MSVC 2022 build), and libyang, libssh and gRPC through vcpkg
+(`vcpkg install libyang:x64-windows libssh:x64-windows grpc:x64-windows`; gRPC
+takes a while to build the first time), then configure with the vcpkg
+toolchain file:
 
 ```
 cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=%VCPKG_ROOT%\scripts\buildsystems\vcpkg.cmake
@@ -199,14 +260,19 @@ release.
 
 ```
 src/core/   libyang wrapper, node descriptions, NETCONF session/framing/XML,
-            schema download (no GUI dependency)
-src/gui/    Qt widgets: schema tree, search, NETCONF panel and worker thread
-tests/      core and NETCONF tests; tests/netconf has the Python test server
+            schema download, edit validation, gNMI paths/data/client
+            (no GUI dependency)
+src/gui/    Qt widgets: schema tree, search, NETCONF and gNMI panels and
+            their worker threads, live graph
+tests/      unit, live and offscreen GUI tests; tests/netconf and tests/gnmi
+            hold the Python test servers
+third_party/gnmi  gNMI protocol definitions (Apache-2.0)
 packaging/  desktop entry and icon
 ```
 
 ## Licence
 
 GPL-3.0-or-later. See [LICENSE](LICENSE). libyang is BSD-3-Clause licensed,
-libssh LGPL-2.1, and Qt is used under the LGPL. The IETF modules in
+libssh LGPL-2.1, gRPC and the gNMI protos (`third_party/gnmi`) Apache-2.0,
+protobuf BSD-3-Clause, and Qt is used under the LGPL. The IETF modules in
 `tests/netconf/ietf` keep their own IETF Trust (Simplified BSD) notices.

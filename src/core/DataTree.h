@@ -25,6 +25,11 @@ public:
     /// are kept as opaque nodes rather than rejected. Values are not
     /// validated, only parsed.
     bool parseXml(const ly_ctx *ctx, const QByteArray &xml);
+    /// Parse RFC 7951 JSON the same way (opaque nodes kept).
+    bool parseJson(const ly_ctx *ctx, const QByteArray &json);
+    /// Take ownership of @p first (and its siblings) and merge it into the tree.
+    bool mergeTree(lyd_node *first);
+    void reset();
 
     const lyd_node *root() const { return m_root; }
     bool isEmpty() const { return m_root == nullptr; }

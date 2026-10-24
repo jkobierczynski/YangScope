@@ -1,5 +1,73 @@
 # Development notes
 
+## 2026-10-24 – v0.4.0, phase 3 (gNMI client)
+
+### Design
+- **gRPC C++ is optional.** `YANGSCOPE_WITH_GNMI=AUTO|ON|OFF`; AUTO enables
+  gNMI when gRPC and protobuf are found (CMake package, or pkg-config `grpc++`
+  plus `grpc_cpp_plugin` on older distributions). A CI job builds without it.
+- **Vendored protos** in `third_party/gnmi` (openconfig/gnmi, Apache-2.0); the
+  only change is the `gnmi_ext.proto` import path. Code is generated at build
+  time.
+- **No protobuf types outside `GnmiClient.cpp`.** `GnmiTypes.h` holds plain
+  structs (paths, values, notifications, Set operations), so the conversion
+  code, the panel and the tests build without gRPC headers.
+- **`GnmiPath`**: gNMI string paths with keys, escapes (`\]`), origins and
+  wildcards; schema node -> path.
+- **`GnmiData`**: resolves gNMI paths against the loaded schemas (with or
+  without module prefixes, through choice/case and augments), wraps any
+  update value into an RFC 7951 document at its path (ancestors and list keys
+  added, scalars typed by the leaf type: 32-bit numbers as JSON numbers,
+  64-bit and decimal64 as strings, empty as `[null]`), and merges the pieces
+  into one libyang tree. Tolerates servers that wrap a container's content in
+  its own name, list paths answered with arrays, and scalar JSON values.
+- **Set validation** reuses the edit-config machinery (`LydUtil`): parse each
+  value with `STRICT | NO_STATE`, apply to a copy of the current configuration
+  in gNMI order (deletes, replaces, updates), `lyd_validate_all`, diff.
+  Deleting something that does not exist is a warning (gNMI allows it).
+- **Threads:** one worker for unary calls, one for the subscription stream, so
+  Get/Set keep working while streaming. `cancelSubscription()`, `poll()` and
+  `cancelCall()` are thread-safe (ClientContext::TryCancel, a write mutex).
+- **Live view:** rates use the target's timestamps when present, so they don't
+  depend on delivery jitter; counters (monotonic numbers) are graphed as rates.
+- Shared UI pieces moved out of the NETCONF panel: `ChangePreview`
+  (validation report, change dialog) and the data tree's entry actions with
+  gNMI labels.
+
+### Bug found on the way
+Loading more files into an open context recompiles it in libyang, which
+invalidates compiled schema pointers held by the reply views. `loadFiles` now
+releases them first (as the reset and device-schema paths already did).
+
+### Test server
+`tests/gnmi/test_server.py` (grpcio): stubs generated from the vendored protos
+at start, RFC 7951 JSON config + state, Get with wildcards and data types,
+Set update/replace/delete, Subscribe ONCE/POLL/STREAM (SAMPLE, ON_CHANGE,
+TARGET_DEFINED, suppress_redundant, updates_only), username/password
+metadata, TLS and mutual TLS with a generated CA. The eth0 counters are a
+smooth function of time so any sample interval gives a sensible rate.
+
+### Tests
+- `test_gnmi_data` (62 checks, no network): path syntax and escapes, resolve,
+  notifications of every shape into a tree, Set script parsing, Set validation
+  (types, mandatory, leafref incl. delete-before-update order, state data,
+  wildcards), JSON of a data entry round-tripping as a no-op replace.
+- `test_gnmi` (53 checks, live): capabilities, Get (JSON_IETF, PROTO,
+  wildcards, NOT_FOUND), validated Set and read-back, Subscribe ONCE / STREAM
+  with cancel / POLL, wrong password, TLS with CA, server-name override,
+  untrusted CA, plain text against TLS, missing CA file, mutual TLS.
+- `test_gui_gnmi` (23 checks, offscreen): connect from the command line, load
+  matching models, Get, Get one entry, edit it as a Set, validate, catch an
+  invalid value, send through the preview, read back, subscribe and see rates.
+All 7 suites pass on libyang 2.1.30 and 6.4.13 with gRPC 1.51.
+
+### Not yet verified
+- Real gNMI targets (SR Linux, cEOS, IOS XR, Junos). Expect differences in
+  JSON vs JSON_IETF output, origins, and how Get CONFIG of a top-level path is
+  answered.
+- Windows/macOS builds with gRPC (CI only; the vcpkg gRPC build is slow and
+  is cached).
+
 ## 2026-10-24 – v0.3.0, changing configuration
 
 ### Local edit-config validation (`core/EditConfig`)
